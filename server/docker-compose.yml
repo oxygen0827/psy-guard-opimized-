@@ -1,0 +1,26 @@
+services:
+  psy-guard:
+    build: .
+    image: psy-guard:latest
+    container_name: psy-guard
+    network_mode: host        # 直接访问宿主机 FunASR(8094) 和 LLM(8081)
+    environment:
+      - PORT=8097
+      - FUNASR_URL=http://localhost:8094/transcribe
+      - LLM_BASE_URL=http://localhost:8081/v1
+      - LLM_MODEL=Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf
+      - LLM_API_KEY=none
+      - WINDOW_SEC=6
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8097)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
