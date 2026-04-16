@@ -49,6 +49,17 @@ final class ServerRelay: NSObject {
         urlSession = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
     }
 
+    private func wsTaskState() -> String {
+        switch webSocketTask?.state {
+        case .running: return "running"
+        case .suspended: return "suspended"
+        case .canceling: return "canceling"
+        case .completed: return "completed"
+        case .none: return "nil"
+        @unknown default: return "unknown"
+        }
+    }
+
     // MARK: - Public API
 
     func connect() {
@@ -63,6 +74,18 @@ final class ServerRelay: NSObject {
         reconnectTimer?.invalidate()
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         isConnected = false
+    }
+
+    func sendStart() {
+        webSocketTask?.send(.string("START")) { error in
+            if let error { print("[Relay] START error: \(error)") }
+        }
+    }
+
+    func sendStop() {
+        webSocketTask?.send(.string("STOP")) { error in
+            if let error { print("[Relay] STOP error: \(error)") }
+        }
     }
 
     /// BLE 收到音频块 -> 进缓冲区 -> 达到阈值后发给服务器
@@ -86,6 +109,7 @@ final class ServerRelay: NSObject {
     // MARK: - Private
 
     private func flushBuffer() {
+        print("[Relay] flushBuffer isConnected=\(isConnected) bufferSize=\(sendBuffer.count) wsTask=\(wsTaskState())")
         guard isConnected, !sendBuffer.isEmpty else {
             sendBuffer.removeAll()
             return

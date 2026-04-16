@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+import traceback
 import uuid
 import wave
 from io import BytesIO
@@ -77,41 +78,52 @@ def pcm_to_wav_bytes(pcm: bytes) -> bytes:
 #  FunASR 转写（WebSocket 协议）
 # ─────────────────────────────────────────────────────────────
 async def transcribe(pcm: bytes) -> str:
-    wav_bytes = pcm_to_wav_bytes(pcm)
+    log.info(f"[ASR] transcribing {len(pcm)} bytes of PCM...")
     try:
-        async with websockets.connect(FUNASR_WS_URL, max_size=10 * 1024 * 1024) as ws:
-            # 1. 发送配置帧
+        async with websockets.connect(FUNASR_WS_URL, max_size=10 * 1024 * 1024,
+                                      open_timeout=10) as ws:
+            # 1. 配置帧：2pass 模式，裸 PCM
             config = {
-                "mode": "offline",
+                "mode": "2pass",
                 "wav_name": "audio",
-                "wav_format": "wav",
+                "wav_format": "pcm",
                 "is_speaking": True,
                 "itn": True,
                 "audio_fs": SAMPLE_RATE,
+                "chunk_size": [5, 10, 5],
+                "chunk_interval": 10,
             }
             await ws.send(json.dumps(config))
 
-            # 2. 发送音频数据（分块，每块 4KB）
-            chunk_size = 4096
-            for i in range(0, len(wav_bytes), chunk_size):
-                await ws.send(wav_bytes[i:i + chunk_size])
+            # 2. 发送裸 PCM（分块 960 字节，约 30ms/块）
+            chunk_size = 960 * SAMPLE_WIDTH  # 1920 bytes
+            for i in range(0, len(pcm), chunk_size):
+                await ws.send(pcm[i:i + chunk_size])
 
-            # 3. 发送结束帧
+            # 3. 结束帧
             await ws.send(json.dumps({"is_speaking": False}))
 
-            # 4. 接收结果（等待带 text 的帧）
+            # 4. 收集结果，取 2pass-offline 那条（is_final=True）
             text = ""
-            async for message in ws:
-                data = json.loads(message)
-                if "text" in data:
-                    text = data["text"].strip()
-                if data.get("is_final", False) or not data.get("is_speaking", True):
-                    break
+            async with asyncio.timeout(30):
+                async for message in ws:
+                    data = json.loads(message)
+                    log.info(f"[ASR] raw response: {data}")
+                    mode = data.get("mode", "")
+                    is_final = data.get("is_final", False)
+                    t = data.get("text", "").strip()
+                    # 2pass-offline 是最终离线结果，取它
+                    if is_final and mode == "2pass-offline" and t:
+                        text = t
+                        break
+                    # 兜底：is_final=True 且没有 mode 字段（静音段）
+                    if is_final and not mode:
+                        break
 
-            log.info(f"[ASR] {text!r}")
+            log.info(f"[ASR] result: {text!r}")
             return text
     except Exception as e:
-        log.error(f"[ASR] Error: {e}")
+        log.error(f"[ASR] Error: {e}\n{traceback.format_exc()}")
         return ""
 
 # ─────────────────────────────────────────────────────────────
@@ -205,7 +217,7 @@ async def handle(websocket):
                         recording = False
                         await websocket.send("ACK:STOP")
                         log.info(f"[WS] {client} STOP")
-                        if len(audio_buf) > SAMPLE_RATE * SAMPLE_WIDTH:
+                        if len(audio_buf) > SAMPLE_RATE * SAMPLE_WIDTH // 4:  # 至少 0.25 秒
                             asyncio.create_task(
                                 process_window(session, websocket, bytes(audio_buf))
                             )

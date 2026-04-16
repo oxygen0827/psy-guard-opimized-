@@ -21,6 +21,13 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
         bleManager.delegate = self
         relay.delegate = self
         relay.connect()
+        #if targetEnvironment(simulator)
+        // 模拟器没有蓝牙，直接模拟已连接状态方便 UI 调试
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.bleStatus = "模拟器模式"
+            self?.bleConnected = true
+        }
+        #endif
     }
 
     // MARK: - User Actions
@@ -28,8 +35,11 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     func toggleRecording() {
         isRecording.toggle()
         bleManager.sendControl(isRecording)
-        if !isRecording {
+        if isRecording {
+            relay.sendStart()
+        } else {
             relay.flushRemaining()
+            relay.sendStop()
         }
     }
 
@@ -59,7 +69,7 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     }
 
     func bleDidReceiveAudio(_ data: Data) {
-        // BLE 音频块直接转发到服务器
+        print("[VM] bleDidReceiveAudio \(data.count) bytes")
         relay.sendAudioChunk(data)
     }
 
@@ -72,13 +82,17 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     // MARK: - ServerRelayDelegate
 
     func relayDidConnect() {
-        serverStatus = "服务器已连接"
-        serverConnected = true
+        DispatchQueue.main.async { [weak self] in
+            self?.serverStatus = "服务器已连接"
+            self?.serverConnected = true
+        }
     }
 
     func relayDidDisconnect() {
-        serverStatus = "服务器断开，重连中..."
-        serverConnected = false
+        DispatchQueue.main.async { [weak self] in
+            self?.serverStatus = "服务器断开，重连中..."
+            self?.serverConnected = false
+        }
     }
 
     func relayDidReceiveAlert(_ alert: AlertMessage) {

@@ -39,10 +39,14 @@ final class BLEManager: NSObject, ObservableObject {
     // MARK: - Public API
 
     func startScan() {
-        guard centralManager.state == .poweredOn else { return }
+        guard centralManager.state == .poweredOn else {
+            print("[BLE] startScan 被调用但蓝牙未就绪，state=\(centralManager.state.rawValue)")
+            return
+        }
         state = .scanning
         delegate?.bleStateChanged(.scanning)
-        centralManager.scanForPeripherals(withServices: [kServiceUUID], options: nil)
+        print("[BLE] 开始扫描所有设备...")
+        centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
 
     func stopScan() {
@@ -68,8 +72,22 @@ final class BLEManager: NSObject, ObservableObject {
 extension BLEManager: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOn {
+        switch central.state {
+        case .poweredOn:
+            print("[BLE] 蓝牙已开启，开始扫描")
             startScan()
+        case .poweredOff:
+            print("[BLE] 蓝牙已关闭")
+        case .unauthorized:
+            print("[BLE] 蓝牙权限被拒绝")
+        case .unsupported:
+            print("[BLE] 设备不支持蓝牙")
+        case .resetting:
+            print("[BLE] 蓝牙重置中")
+        case .unknown:
+            print("[BLE] 蓝牙状态未知")
+        @unknown default:
+            break
         }
     }
 
@@ -77,9 +95,9 @@ extension BLEManager: CBCentralManagerDelegate {
                         didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any],
                         rssi RSSI: NSNumber) {
-        // 找到第一个 XIAO-Sense 就连
-        let name = peripheral.name ?? ""
-        guard name.contains("XIAO") || name.contains("Sense") || name.contains("Psy") else { return }
+        let name = peripheral.name ?? "(无名)"
+        print("[BLE] 发现设备: \(name)  RSSI=\(RSSI)  advData=\(advertisementData.keys.joined(separator: ","))")
+        guard name.contains("XIAO") || name.contains("Sense") || name.contains("Psy") || name.contains("Arduino") else { return }
 
         self.peripheral = peripheral
         centralManager.stopScan()

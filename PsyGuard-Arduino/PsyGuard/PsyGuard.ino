@@ -51,7 +51,7 @@ void setup() {
     while (1) yield();
   }
 
-  BLE.setLocalName("XIAO-Sense");
+  BLE.setLocalName("PsyGuard");
   BLE.setAdvertisedService(nusService);
   nusService.addCharacteristic(txChar);
   nusService.addCharacteristic(rxChar);
