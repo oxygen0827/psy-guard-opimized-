@@ -3,17 +3,55 @@ services:
     build: .
     image: psy-guard:latest
     container_name: psy-guard
-    network_mode: host        # 直接访问宿主机 FunASR(8094) 和 LLM(8081)
+    network_mode: host
+    volumes:
+      - psy-guard-data:/data   # SQLite 持久化目录
     environment:
       - PORT=8097
+
+      # ── ASR 模式 ──────────────────────────────────────────
+      # local（默认）: 使用本机 FunASR WebSocket
+      # api: 使用 Whisper-compatible 云端 STT API
+      - ASR_PROVIDER=local
+
+      # 本地模式 FunASR 地址
       - FUNASR_WS_URL=ws://localhost:10095
+
+      # API 模式 STT（ASR_PROVIDER=api 时生效）
+      # 兼容 OpenAI / 讯飞 / 阿里云 Whisper-compatible 端点
+      #- ASR_API_URL=https://api.openai.com/v1
+      #- ASR_API_KEY=sk-xxx
+      #- ASR_MODEL=whisper-1
+
+      # ── LLM（两种模式通用，支持任意 OpenAI-compatible API）──
+      # 本地示例:
       - LLM_BASE_URL=http://localhost:8086/v1
       - LLM_MODEL=gemma-4-E4B-it-Q4_K_M.gguf
       - LLM_API_KEY=none
+      # 通义千问示例（注释掉上面三行，取消下面注释）:
+      #- LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+      #- LLM_MODEL=qwen-turbo
+      #- LLM_API_KEY=sk-xxx
+      # 豆包示例:
+      #- LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+      #- LLM_MODEL=ep-xxx
+      #- LLM_API_KEY=xxx
+
+      # ── 分析参数 ─────────────────────────────────────────
       - WINDOW_SEC=5
       - MIN_TEXT_LEN=4
       - CONTEXT_MAX_CHARS=300
       - LLM_CONCURRENCY=1
+
+      # ── 持久化 ───────────────────────────────────────────
+      - DB_PATH=/data/psy-guard.db   # 留空则禁用持久化
+
+      # ── 管理员推送 Webhook（可选）────────────────────────
+      # 支持 Bark iOS: https://api.day.app/<your-key>
+      # 支持钉钉/飞书 Robot: https://oapi.dingtalk.com/robot/send?access_token=xxx
+      # 支持任意接收 POST JSON 的端点
+      - ADMIN_WEBHOOK_URL=
+
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c",
@@ -27,3 +65,6 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+
+volumes:
+  psy-guard-data:

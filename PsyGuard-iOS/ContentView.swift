@@ -26,7 +26,7 @@ struct ContentView: View {
     // MARK: - 状态栏
 
     private var statusBar: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             HStack {
                 Circle()
                     .fill(vm.bleConnected ? .green : .gray)
@@ -35,6 +35,11 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
+                if vm.isRecording {
+                    Label(vm.sessionDurationText, systemImage: "waveform")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.red)
+                }
             }
             HStack {
                 Circle()
@@ -47,7 +52,7 @@ struct ContentView: View {
             }
         }
         .padding(.horizontal)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(Color(.systemGroupedBackground))
     }
 
@@ -66,7 +71,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
+        .padding(.vertical, 28)
         .disabled(!vm.bleConnected)
         .opacity(vm.bleConnected ? 1 : 0.4)
     }
@@ -85,7 +90,7 @@ struct ContentView: View {
                             .padding(10)
                             .id("bottom")
                     }
-                    .frame(height: 80)
+                    .frame(height: 76)
                     .background(Color(.secondarySystemGroupedBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .padding(.horizontal)
@@ -110,7 +115,9 @@ struct ContentView: View {
                 )
             } else {
                 List(vm.alerts) { alert in
-                    AlertRow(alert: alert)
+                    AlertRow(alert: alert) { id in
+                        vm.acknowledgeAlert(id: id)
+                    }
                 }
                 .listStyle(.plain)
             }
@@ -122,6 +129,7 @@ struct ContentView: View {
 
 struct AlertRow: View {
     let alert: AlertMessage
+    let onAcknowledge: (UUID) -> Void
 
     private var levelColor: Color {
         switch alert.level {
@@ -140,30 +148,60 @@ struct AlertRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // 等级标签
-            Text(levelText)
-                .font(.caption2.bold())
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(levelColor, in: Capsule())
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                Text(levelText)
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(levelColor, in: Capsule())
 
-            VStack(alignment: .leading, spacing: 4) {
-                if !alert.keyword.isEmpty {
-                    Text("关键词：\(alert.keyword)")
-                        .font(.caption.bold())
-                        .foregroundStyle(levelColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    if !alert.keyword.isEmpty {
+                        Text("关键词：\(alert.keyword)")
+                            .font(.caption.bold())
+                            .foregroundStyle(levelColor)
+                    }
+                    Text(alert.time.formatted(date: .omitted, time: .standard))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-                Text(alert.text)
-                    .font(.subheadline)
-                    .lineLimit(3)
-                Text(alert.time.formatted(date: .omitted, time: .standard))
-                    .font(.caption2)
+
+                Spacer()
+
+                if alert.isAcknowledged {
+                    Label("已处理", systemImage: "checkmark.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button {
+                        onAcknowledge(alert.id)
+                    } label: {
+                        Text("标记处理")
+                            .font(.caption2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.blue.opacity(0.12), in: Capsule())
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Text(alert.text)
+                .font(.subheadline)
+                .lineLimit(4)
+
+            if !alert.suggestion.isEmpty {
+                Label(alert.suggestion, systemImage: "lightbulb")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.top, 2)
             }
         }
         .padding(.vertical, 4)
+        .opacity(alert.isAcknowledged ? 0.55 : 1)
     }
 }
 

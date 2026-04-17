@@ -2,11 +2,22 @@ import Foundation
 
 // 服务器推回来的预警结构
 struct AlertMessage: Identifiable {
-    let id = UUID()
+    let id: UUID
     let level: AlertLevel
     let keyword: String
     let text: String
+    let suggestion: String
     let time: Date
+    var isAcknowledged: Bool = false
+
+    init(level: AlertLevel, keyword: String, text: String, suggestion: String = "", time: Date = Date()) {
+        self.id = UUID()
+        self.level = level
+        self.keyword = keyword
+        self.text = text
+        self.suggestion = suggestion
+        self.time = time
+    }
 
     enum AlertLevel: String {
         case high   = "high"
@@ -144,9 +155,10 @@ final class ServerRelay: NSObject {
 
         guard type == "alert" else { return }
         let level = AlertMessage.AlertLevel(rawValue: dict["level"] as? String ?? "low") ?? .low
-        let keyword = dict["keyword"] as? String ?? ""
-        let text = dict["text"] as? String ?? ""
-        let alert = AlertMessage(level: level, keyword: keyword, text: text, time: Date())
+        let keyword    = dict["keyword"]    as? String ?? ""
+        let text       = dict["text"]       as? String ?? ""
+        let suggestion = dict["suggestion"] as? String ?? ""
+        let alert = AlertMessage(level: level, keyword: keyword, text: text, suggestion: suggestion)
         DispatchQueue.main.async {
             self.delegate?.relayDidReceiveAlert(alert)
         }

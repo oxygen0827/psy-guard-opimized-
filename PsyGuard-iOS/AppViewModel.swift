@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UserNotifications
 
 final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDelegate {
 
@@ -11,19 +12,23 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     @Published var alerts: [AlertMessage] = []
     @Published var bleConnected: Bool = false
     @Published var serverConnected: Bool = false
-    @Published var transcript: String = ""  // 实时转写文字
+    @Published var transcript: String = ""
+
+    // 会话计时
+    @Published var sessionDurationText: String = ""
 
     // MARK: - Private
 
     private let bleManager = BLEManager()
     private let relay = ServerRelay()
+    private var sessionStart: Date?
+    private var sessionTimer: Timer?
 
     init() {
         bleManager.delegate = self
         relay.delegate = self
         relay.connect()
         #if targetEnvironment(simulator)
-        // 模拟器没有蓝牙，直接模拟已连接状态方便 UI 调试
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.bleStatus = "模拟器模式"
             self?.bleConnected = true
@@ -37,8 +42,10 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
         isRecording.toggle()
         bleManager.sendControl(isRecording)
         if isRecording {
+            startSession()
             relay.sendStart()
         } else {
+            endSession()
             relay.flushRemaining()
             relay.sendStop()
         }
@@ -46,6 +53,64 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
 
     func clearAlerts() {
         alerts.removeAll()
+    }
+
+    func acknowledgeAlert(id: UUID) {
+        if let idx = alerts.firstIndex(where: { $0.id == id }) {
+            alerts[idx].isAcknowledged = true
+        }
+    }
+
+    // MARK: - Session
+
+    private func startSession() {
+        sessionStart = Date()
+        transcript = ""
+        sessionDurationText = "00:00"
+        sessionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, let start = self.sessionStart else { return }
+            let elapsed = Int(Date().timeIntervalSince(start))
+            let m = elapsed / 60
+            let s = elapsed % 60
+            self.sessionDurationText = String(format: "%02d:%02d", m, s)
+        }
+    }
+
+    private func endSession() {
+        sessionTimer?.invalidate()
+        sessionTimer = nil
+        sessionStart = nil
+    }
+
+    // MARK: - Local Notification
+
+    private func scheduleNotification(for alert: AlertMessage) {
+        let content = UNMutableNotificationContent()
+
+        switch alert.level {
+        case .high:
+            content.title = "高危预警"
+            content.sound = .defaultCritical
+        case .medium:
+            content.title = "警告"
+            content.sound = .default
+        case .low:
+            return  // 低级预警不推系统通知，只展示 App 内列表
+        }
+
+        var body = alert.text
+        if !alert.keyword.isEmpty { body = "[\(alert.keyword)] \(body)" }
+        content.body = body
+        if !alert.suggestion.isEmpty {
+            content.subtitle = alert.suggestion
+        }
+
+        let request = UNNotificationRequest(
+            identifier: alert.id.uuidString,
+            content: content,
+            trigger: nil  // 立即触发
+        )
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 
     // MARK: - BLEManagerDelegate
@@ -96,17 +161,23 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     }
 
     func relayDidReceiveAlert(_ alert: AlertMessage) {
-        alerts.insert(alert, at: 0)  // 最新的在最上面
-        if alerts.count > 50 {
-            alerts = Array(alerts.prefix(50))
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.alerts.insert(alert, at: 0)
+            if self.alerts.count > 50 {
+                self.alerts = Array(self.alerts.prefix(50))
+            }
+            self.scheduleNotification(for: alert)
         }
     }
 
     func relayDidReceiveTranscript(_ text: String) {
-        // 追加到滚动字幕，最多保留最近 500 字
-        transcript += text
-        if transcript.count > 500 {
-            transcript = String(transcript.suffix(500))
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.transcript += text
+            if self.transcript.count > 500 {
+                self.transcript = String(self.transcript.suffix(500))
+            }
         }
     }
 }
