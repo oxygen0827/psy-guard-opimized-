@@ -448,7 +448,7 @@
 
   <!-- Section 0: v1 vs v2 对比 -->
   <div class="section">
-    <h2 class="section-title">架构升级：v1 vs v2 <span>Architecture Evolution</span></h2>
+    <h2 class="section-title">架构演进：规划 vs 实现 <span>Architecture Evolution</span></h2>
     <div class="compare-box">
       <div class="compare-card old">
         <div class="cc-label">v1.0 - 端侧 ASR + 本地匹配（已废弃）</div>
@@ -463,7 +463,7 @@
         </ul>
       </div>
       <div class="compare-card new">
-        <div class="cc-label">v3.0 - 管道式 ASR + LLM（当前实现）</div>
+        <div class="cc-label">v3.0 - 当前实现（管道式 ASR + LLM）</div>
         <div class="cc-title">App 做纯中继，服务器双模式处理</div>
         <div class="cc-desc">BLE 采集 → iOS 中继 → 服务器 ASR 转写 + LLM 语义分析 → 预警下发，支持本地/云端两种模式</div>
         <ul class="cc-list">
@@ -528,7 +528,7 @@
             </div>
             <div class="arch-node highlight">
               <div class="node-title">预警接收 + 设备控制</div>
-              <div class="node-desc">接收云端返回的预警事件，触发 App 通知 + BLE 指令控制项链振动，实时显示转录文字</div>
+              <div class="node-desc">接收服务器返回的预警 JSON，触发系统本地通知 + App 内弹窗，实时显示转写字幕</div>
               <div class="node-tech">
                 <span class="tech-tag green">轻量 UI</span>
                 <span class="tech-tag">BLE Write</span>
@@ -565,7 +565,7 @@
             </div>
             <div class="arch-node">
               <div class="node-title">LLM 语义分析</div>
-              <div class="node-desc">OpenAI-compatible API，支持本地 LLM（llama.cpp）或云端（通义千问/豆包/GPT-4），滚动上下文缓冲 + 串行化防积压</div>
+              <div class="node-desc">OpenAI-compatible API，支持本地 LLM 或任意云端 API（通义/豆包/GPT-4 等改 env 即可），滚动上下文缓冲 + 串行化防积压</div>
               <div class="node-tech">
                 <span class="tech-tag purple">OpenAI-compatible</span>
                 <span class="tech-tag purple">本地/云端</span>
@@ -613,7 +613,7 @@
               <div class="node-title">管理员 App</div>
               <div class="node-desc">实时预警推送接收、快速响应处理、咨询师状态概览</div>
               <div class="node-tech">
-                <span class="tech-tag amber">Flutter</span>
+                <span class="tech-tag amber">Webhook 接收端</span>
                 <span class="tech-tag amber">Push 通知</span>
                 <span class="tech-tag amber">规划中</span>
               </div>
@@ -641,76 +641,72 @@
     <div class="sequence">
       <div class="seq-header">
         <div class="seq-entity">
-          <div class="ent-icon" style="background:rgba(6,182,212,0.12);">&#128204;</div>
-          <div class="ent-name">项链设备</div>
+          <div class="ent-icon" style="background:rgba(6,182,212,0.12);">&#127908;</div>
+          <div class="ent-name">XIAO 设备</div>
         </div>
         <div class="seq-entity">
           <div class="ent-icon" style="background:rgba(59,130,246,0.12);">&#128241;</div>
-          <div class="ent-name">App (中继)</div>
-        </div>
-        <div class="seq-entity">
-          <div class="ent-icon" style="background:rgba(16,185,129,0.12);">&#129302;</div>
-          <div class="ent-name">大模型</div>
+          <div class="ent-name">iPhone App</div>
         </div>
         <div class="seq-entity">
           <div class="ent-icon" style="background:rgba(139,92,246,0.12);">&#9729;&#65039;</div>
-          <div class="ent-name">后端服务</div>
+          <div class="ent-name">psy-guard 服务器</div>
         </div>
         <div class="seq-entity">
-          <div class="ent-icon" style="background:rgba(245,158,11,0.12);">&#128100;</div>
-          <div class="ent-name">管理员</div>
+          <div class="ent-icon" style="background:rgba(16,185,129,0.12);">&#129302;</div>
+          <div class="ent-name">ASR + LLM</div>
         </div>
       </div>
       <div class="seq-steps">
         <div class="seq-step">
           <div class="seq-num">1</div>
-          <div class="seq-content"><strong>咨询师佩戴项链，App 开启会话</strong> -- BLE 自动连接设备，同时建立到云端的 WebSocket 长连接</div>
-          <span class="seq-badge ble">BLE + WS</span>
-        </div>
-        <div class="seq-step">
-          <div class="seq-num">2</div>
-          <div class="seq-content"><strong>会话网关注入 System Prompt</strong> -- 包含敏感词分级规则、预警输出 JSON 格式要求、心理咨询场景上下文</div>
-          <span class="seq-badge llm">Prompt</span>
-        </div>
-        <div class="seq-step">
-          <div class="seq-num">3</div>
-          <div class="seq-content"><strong>麦克风持续采集音频</strong> -- 16kHz/16bit 采样，ESP32-S3 Opus 编码，BLE 实时传输到手机</div>
-          <span class="seq-badge ble">BLE</span>
-        </div>
-        <div class="seq-step">
-          <div class="seq-num">4</div>
-          <div class="seq-content"><strong>App 透传音频到云端</strong> -- 接收 BLE 音频帧后直接通过 WebSocket 发送至大模型，App 不做任何处理</div>
+          <div class="seq-content"><strong>App 启动，建立 WebSocket 连接</strong> — iPhone 连接服务器，同时扫描 BLE 设备</div>
           <span class="seq-badge ws">WebSocket</span>
         </div>
         <div class="seq-step">
+          <div class="seq-num">2</div>
+          <div class="seq-content"><strong>BLE 自动连接 XIAO 设备</strong> — CoreBluetooth 扫描到 "XIAO-Sense"，连接并订阅 TX Notify 特征值</div>
+          <span class="seq-badge ble">BLE 5.0</span>
+        </div>
+        <div class="seq-step">
+          <div class="seq-num">3</div>
+          <div class="seq-content"><strong>咨询师点击开始监听</strong> — App 向 XIAO 写入 0x01，同时向服务器发送 "START" 文本帧</div>
+          <span class="seq-badge ble">BLE Write</span>
+        </div>
+        <div class="seq-step">
+          <div class="seq-num green">4</div>
+          <div class="seq-content"><strong>XIAO 持续采集并发送音频</strong> — 板载 PDM 麦克风 16kHz/16bit 采集，BLE Notify 分包（244字节/包）实时推送</div>
+          <span class="seq-badge ble">PCM 流</span>
+        </div>
+        <div class="seq-step">
           <div class="seq-num green">5</div>
-          <div class="seq-content"><strong>大模型流式处理</strong> -- 实时输出转录文字 + 持续进行语义分析，理解对话上下文和说话人意图</div>
-          <span class="seq-badge llm">Streaming STT + NLU</span>
+          <div class="seq-content"><strong>iPhone 缓冲并转发</strong> — 积累 4KB 后通过 WebSocket 二进制帧发往服务器，纯透传不处理</div>
+          <span class="seq-badge ws">WebSocket</span>
         </div>
         <div class="seq-step">
-          <div class="seq-num warn">6</div>
-          <div class="seq-content"><strong>大模型检测到敏感内容</strong> -- 结合上下文语义判断，输出结构化预警：{level: "high", keyword: "不想活了", context: "来访者表达自杀意念", action: "alert"}</div>
-          <span class="seq-badge llm">AI 研判</span>
+          <div class="seq-num green">6</div>
+          <div class="seq-content"><strong>服务器缓冲 5 秒窗口后转写</strong> — 本地模式：FunASR WebSocket；API 模式：Whisper-compatible REST（env 切换）</div>
+          <span class="seq-badge llm">ASR</span>
         </div>
         <div class="seq-step">
-          <div class="seq-num danger">7</div>
-          <div class="seq-content"><strong>预警实时下发 App</strong> -- WebSocket 回传预警事件，App 立即触发：BLE 指令让项链振动 + App 静默弹窗</div>
-          <span class="seq-badge vibr">振动 + 通知</span>
+          <div class="seq-num green">7</div>
+          <div class="seq-content"><strong>服务器推送实时字幕</strong> — 转写成功后立即发回 <code>{"type":"transcript","text":"..."}</code>，App 实时显示</div>
+          <span class="seq-badge ws">transcript</span>
         </div>
         <div class="seq-step">
-          <div class="seq-num">8</div>
-          <div class="seq-content"><strong>后端记录 + 分级推送</strong> -- 预警落库，高危事件即时 Push + 短信给管理员，中低危 App 通知</div>
-          <span class="seq-badge push">Push</span>
+          <div class="seq-num warn">8</div>
+          <div class="seq-content"><strong>LLM 语义分析</strong> — 转写文本 + 滚动上下文（300字）送入 LLM，串行化调用防积压</div>
+          <span class="seq-badge llm">LLM</span>
         </div>
         <div class="seq-step">
-          <div class="seq-num">9</div>
-          <div class="seq-content"><strong>管理员实时接收</strong> -- 查看预警详情（含转录上下文）、标记处理状态、必要时介入干预</div>
-          <span class="seq-badge push">Action</span>
+          <div class="seq-num danger">9</div>
+          <div class="seq-content"><strong>检测到危机信号 — 预警下发</strong> — 服务器发回 alert JSON，写入 SQLite，高危触发 Webhook 推管理员</div>
+          <span class="seq-badge push">Alert JSON</span>
         </div>
         <div class="seq-step">
-          <div class="seq-num">10</div>
-          <div class="seq-content"><strong>会话结束，生成摘要</strong> -- 大模型输出本次咨询会话总结：关键议题、情绪状态评估、需关注点</div>
-          <span class="seq-badge llm">Summary</span>
+          <div class="seq-num danger">10</div>
+          <div class="seq-content"><strong>iPhone 展示预警并推系统通知</strong> — 高危/中危触发本地通知（锁屏可见 + 震动），App 内显示预警详情 + 干预建议，咨询师可标记处理</div>
+          <span class="seq-badge vibr">本地通知</span>
         </div>
       </div>
     </div>
@@ -768,108 +764,44 @@
     </div>
   </div>
 
-  <!-- Section 4: LLM 供应商选型 -->
+  <!-- Section 5: 硬件规格 -->
   <div class="section">
-    <h2 class="section-title">流式语音大模型选型 <span>LLM Provider Comparison</span></h2>
-    <div class="provider-grid">
-      <div class="provider-card recommended">
-        <div class="prov-name">豆包大模型 (字节跳动) <span class="rec-badge">推荐</span></div>
-        <div class="prov-by">ByteDance / Volcano Engine</div>
-        <div class="prov-feat">
-          <span>- 语音大模型支持流式音频输入</span>
-          <span>- 中文语音识别准确率业界领先</span>
-          <span>- 支持 WebSocket 双向流式通信</span>
-          <span>- 可自定义 System Prompt 注入监控规则</span>
-          <span>- 延迟低，国内机房部署，网络稳定</span>
-        </div>
-        <div class="prov-price">约 0.03-0.05 元/分钟 (语音输入)</div>
-      </div>
-      <div class="provider-card">
-        <div class="prov-name">通义千问 Audio (阿里云)</div>
-        <div class="prov-by">Alibaba Cloud / Qwen-Audio</div>
-        <div class="prov-feat">
-          <span>- Qwen-Audio 多模态，直接处理音频</span>
-          <span>- 阿里云生态完善，配套服务齐全</span>
-          <span>- 支持流式 ASR + LLM 联动管道</span>
-          <span>- 企业级 SLA 保障</span>
-        </div>
-        <div class="prov-price">ASR ~0.03元/分钟 + LLM 按 token 计费</div>
-      </div>
-      <div class="provider-card">
-        <div class="prov-name">MiniMax Speech-to-Text + Chat</div>
-        <div class="prov-by">MiniMax</div>
-        <div class="prov-feat">
-          <span>- 实时语音对话能力强</span>
-          <span>- 低延迟流式输出</span>
-          <span>- API 接入简单，文档清晰</span>
-          <span>- 价格有竞争力</span>
-        </div>
-        <div class="prov-price">约 0.02-0.04 元/分钟</div>
-      </div>
-      <div class="provider-card">
-        <div class="prov-name">讯飞星火 + 流式 ASR</div>
-        <div class="prov-by">iFlytek</div>
-        <div class="prov-feat">
-          <span>- 中文语音识别老牌厂商，准确率极高</span>
-          <span>- 流式 ASR 非常成熟，延迟低</span>
-          <span>- 可搭配 LLM 做"ASR 管道 + LLM 分析"方案</span>
-          <span>- 适合作为备选/对比方案</span>
-        </div>
-        <div class="prov-price">ASR ~0.033元/分钟 + 星火 LLM 按量</div>
-      </div>
-    </div>
-    <div class="summary-box" style="margin-top: 16px;">
-      <h3>供应商选型建议</h3>
-      <p><strong>两种路线均可：</strong></p>
-      <p><strong>路线 A（一体化）：</strong>直接使用支持音频输入的多模态大模型（如豆包语音大模型），音频流直接输入模型，模型一步完成 STT + 语义分析 + 预警。架构最简，但依赖模型的语音能力。</p>
-      <p><strong>路线 B（管道式）：</strong>用成熟的流式 ASR 服务（讯飞/阿里云）做转录，转录文本实时喂给 LLM（通义千问/豆包文本模型）做语义分析。ASR 和 LLM 解耦，各自可替换，稳定性更高。</p>
-      <p><strong>Demo 阶段建议先用路线 A 快速验证</strong>，因为接入最简单。后期可根据实际效果决定是否切换到路线 B。</p>
-    </div>
-  </div>
-
-  <!-- Section 5: 硬件方案 -->
-  <div class="section">
-    <h2 class="section-title">硬件方案 (ESP32-S3 智能项链) <span>Hardware Design</span></h2>
+    <h2 class="section-title">硬件规格 <span>XIAO nRF52840 Sense</span></h2>
     <div class="hw-spec">
       <div class="hw-item">
         <div class="hw-label">主控芯片</div>
-        <div class="hw-value">ESP32-S3-WROOM-1 (N8R2)</div>
-        <div class="hw-detail">双核 Xtensa LX7 @240MHz, 8MB Flash, 2MB PSRAM, BLE 5.0 + WiFi</div>
+        <div class="hw-value">Nordic nRF52840</div>
+        <div class="hw-detail">ARM Cortex-M4 @ 64 MHz，1MB Flash，256KB RAM，BLE 5.0</div>
       </div>
       <div class="hw-item">
         <div class="hw-label">麦克风</div>
-        <div class="hw-value">INMP441 MEMS 麦克风</div>
-        <div class="hw-detail">I2S 数字输出, 16kHz/16bit, SNR 61dB, 全向拾音</div>
+        <div class="hw-value">MSM261D3526H1CPM（板载 PDM）</div>
+        <div class="hw-detail">PDM 接口，单声道，16kHz/16bit，直接输出 PCM 无需外部编解码</div>
       </div>
       <div class="hw-item">
-        <div class="hw-label">振动反馈</div>
-        <div class="hw-value">LRA 线性马达 (8mm)</div>
-        <div class="hw-detail">振动模式可编程 -- 不同预警等级不同振动节奏</div>
+        <div class="hw-label">BLE 协议</div>
+        <div class="hw-value">Nordic UART Service (NUS)</div>
+        <div class="hw-detail">Service: 6E400001，TX Notify: 6E400003（音频），RX Write: 6E400002（控制）</div>
       </div>
       <div class="hw-item">
-        <div class="hw-label">电池</div>
-        <div class="hw-value">300mAh LiPo + TP4056</div>
-        <div class="hw-detail">Type-C 充电, 续航 4-6 小时连续采集+传输</div>
+        <div class="hw-label">音频格式</div>
+        <div class="hw-value">PCM 16bit LE，单声道，16000 Hz</div>
+        <div class="hw-detail">BLE 分包 244 字节/包，约 32 KB/s，手机侧 4KB 缓冲后转发</div>
       </div>
       <div class="hw-item">
-        <div class="hw-label">外壳</div>
-        <div class="hw-value">~30mm x 30mm x 10mm 坠饰</div>
-        <div class="hw-detail">树脂/金属外壳，隐蔽 LED 状态灯，自然佩戴不突兀</div>
+        <div class="hw-label">电源</div>
+        <div class="hw-value">锂电池（外接）</div>
+        <div class="hw-detail">Type-C 充电，持续采集 + BLE 传输约 4-6 小时</div>
       </div>
       <div class="hw-item">
-        <div class="hw-label">通信</div>
-        <div class="hw-value">BLE 5.0</div>
-        <div class="hw-detail">v2 方案中 BLE 足够（WiFi 不再需要，设备更省电）</div>
+        <div class="hw-label">开发环境</div>
+        <div class="hw-value">Arduino IDE</div>
+        <div class="hw-detail">Seeed nRF52 mbed-enabled Boards + ArduinoBLE 库 + PDM 内置库</div>
       </div>
       <div class="hw-item">
-        <div class="hw-label">功耗</div>
-        <div class="hw-value">~50mA 平均工作电流</div>
-        <div class="hw-detail">麦克风 + Opus 编码 + BLE TX（v2 去掉 WiFi 备选后更省电）</div>
-      </div>
-      <div class="hw-item">
-        <div class="hw-label">固件</div>
-        <div class="hw-value">ESP-IDF 5.x</div>
-        <div class="hw-detail">I2S 采集 + Opus 编码 + BLE GATT + 振动控制 + OTA</div>
+        <div class="hw-label">LED 状态</div>
+        <div class="hw-value">三色 LED（蓝/绿/红）</div>
+        <div class="hw-detail">蓝=广播中，绿=已连接，红=录制中（低电平点亮）</div>
       </div>
     </div>
   </div>
@@ -892,28 +824,28 @@
           <td><span class="level-badge high">HIGH</span></td>
           <td>自杀/自伤/伤害意图</td>
           <td>来访者以第一人称表达当前/近期的自杀意念、自伤行为或伤害他人计划，语境为真实表达而非学术讨论或咨询师评估提问</td>
-          <td>项链振动(急促) + App弹窗 + 管理员即时Push + 短信</td>
+          <td>系统通知（锁屏）+ App 弹窗 + Webhook 推管理员</td>
           <td>&lt; 3s</td>
         </tr>
         <tr>
           <td><span class="level-badge high">HIGH</span></td>
           <td>虐待/性侵披露</td>
           <td>来访者描述正在遭受或近期遭受身体虐待、性侵害，且非回顾已解决事件</td>
-          <td>项链振动(急促) + App弹窗 + 管理员即时Push + 短信</td>
+          <td>系统通知（锁屏）+ App 弹窗 + Webhook 推管理员</td>
           <td>&lt; 3s</td>
         </tr>
         <tr>
           <td><span class="level-badge mid">MEDIUM</span></td>
           <td>严重心理危机</td>
           <td>来访者表达强烈绝望感、无价值感、放弃感，但未明确表达自杀意图</td>
-          <td>项链振动(轻柔) + App通知 + 管理员App通知</td>
+          <td>App 通知 + Webhook 推管理员</td>
           <td>&lt; 5s</td>
         </tr>
         <tr>
           <td><span class="level-badge mid">MEDIUM</span></td>
           <td>违规执业嫌疑</td>
           <td>咨询师承诺治愈效果、建议停药、暗示不当关系、违反保密原则</td>
-          <td>App通知 + 管理员App通知</td>
+          <td>App 内展示（不推通知）</td>
           <td>&lt; 10s</td>
         </tr>
         <tr>
@@ -926,85 +858,13 @@
       </tbody>
     </table>
     <div class="summary-box" style="margin-top: 16px;">
-      <h3>与 v1 关键词匹配的本质区别</h3>
-      <p>v1 方案中 "想死" 这个词只要出现就触发预警。而 v2 大模型方案能理解：</p>
+      <h3>语义驱动预警的核心优势</h3>
+      <p>简单关键词匹配中 "想死" 这个词只要出现就触发预警。而 LLM 语义分析方案能理解：</p>
       <p>-- "我真的想死了，每天都在想从窗户跳下去" -> <strong>触发 HIGH</strong>（真实自杀意念）</p>
       <p>-- "你有没有想过死亡？" -> <strong>不触发</strong>（咨询师正常评估提问）</p>
       <p>-- "我去年想过死，但现在好多了" -> <strong>触发 LOW</strong>（历史事件，需记录但无需告警）</p>
       <p>-- "这篇关于自杀预防的论文提到..." -> <strong>不触发</strong>（学术讨论）</p>
-      <p>这就是"全靠大模型"的核心价值 -- 语义级理解，而非字面匹配。</p>
-    </div>
-  </div>
-
-  <!-- Section 7: 延迟分析 -->
-  <div class="section">
-    <h2 class="section-title">端到端延迟分析 <span>Latency Breakdown</span></h2>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>环节</th>
-          <th>耗时</th>
-          <th>说明</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>麦克风采集 + Opus 编码</td>
-          <td>~20ms</td>
-          <td>ESP32-S3 I2S DMA + Opus 帧编码</td>
-        </tr>
-        <tr>
-          <td>BLE 传输到手机</td>
-          <td>~30ms</td>
-          <td>BLE 5.0, 连接间隔 15ms, MTU 512</td>
-        </tr>
-        <tr>
-          <td>App WebSocket 转发</td>
-          <td>~5ms</td>
-          <td>纯透传，几乎零处理开销</td>
-        </tr>
-        <tr>
-          <td>网络传输到云端</td>
-          <td>~30-80ms</td>
-          <td>4G/WiFi 到国内云服务商，视网络质量</td>
-        </tr>
-        <tr>
-          <td>大模型流式处理 (STT + 语义)</td>
-          <td>~500-1500ms</td>
-          <td>首字延迟 ~500ms，完整语义判断需积累足够上下文约 1-1.5s</td>
-        </tr>
-        <tr>
-          <td>预警 WebSocket 回传</td>
-          <td>~30-80ms</td>
-          <td>云端到手机</td>
-        </tr>
-        <tr>
-          <td>BLE 振动指令</td>
-          <td>~30ms</td>
-          <td>单次 BLE Write</td>
-        </tr>
-        <tr>
-          <td style="font-weight:600; color:#f1f5f9;">总计 (咨询师感知)</td>
-          <td style="font-weight:600; color:#10b981;">~1-2s</td>
-          <td style="color:#10b981;">从说出敏感内容到项链振动，比 v1 略慢但仍然实时可用</td>
-        </tr>
-        <tr>
-          <td>后端处理 + 推送</td>
-          <td>~1-2s</td>
-          <td>预警落库 + Push 通道推送</td>
-        </tr>
-        <tr>
-          <td style="font-weight:600; color:#f1f5f9;">总计 (管理员感知)</td>
-          <td style="font-weight:600; color:#fbbf24;">~2-4s</td>
-          <td style="color:#fbbf24;">比 v1 更快！因为不再需要单独的"云端 AI 二次研判"环节</td>
-        </tr>
-      </tbody>
-    </table>
-    <div class="summary-box" style="margin-top: 16px;">
-      <h3>延迟对比：v1 vs v2</h3>
-      <p><strong>咨询师感知：</strong>v1 约 400-600ms vs v2 约 1-2s。v2 略慢，但心理咨询场景对亚秒级不敏感，1-2 秒完全可接受。</p>
-      <p><strong>管理员感知：</strong>v1 约 3-8s vs v2 约 2-4s。v2 反而更快！因为 v1 需要先本地匹配再上报云端二次研判，而 v2 大模型一步到位。</p>
-      <p><strong>更重要的：v2 的预警质量远高于 v1</strong>，管理员收到的是经过语义理解的高质量预警，而非简单关键词匹配的高误报率告警。</p>
+      <p>这就是管道式 ASR + LLM 方案的核心价值 -- 语义级理解，而非字面匹配。</p>
     </div>
   </div>
 
@@ -1014,34 +874,34 @@
     <div class="timeline">
       <div class="timeline-item active">
         <div class="tl-phase">Phase 1 - 硬件原型验证</div>
-        <div class="tl-title">ESP32-S3 开发板 + BLE 音频传输</div>
-        <div class="tl-desc">I2S 麦克风采集 + Opus 编码 + BLE 传输到手机 + 振动马达控制。用开发板即可，不需要做外壳。</div>
+        <div class="tl-title">XIAO nRF52840 Sense + BLE 音频传输</div>
+        <div class="tl-desc">PDM 麦克风采集 + PCM 16kHz + BLE Nordic UART Service 传输到手机。验证 BLE 连接稳定性和音频质量。</div>
         <div class="tl-duration">预计 1-2 周</div>
       </div>
       <div class="timeline-item">
-        <div class="tl-phase">Phase 2 - App + 大模型联调</div>
-        <div class="tl-title">App 中继 + 大模型流式语音接入</div>
-        <div class="tl-desc">Flutter App：BLE 接收 + WebSocket 转发音频至大模型 API + 接收转录/预警结果 + 振动指令回传。这是核心环节。可先用手机麦克风模拟，不依赖硬件。</div>
-        <div class="tl-duration">预计 2-3 周 (可与 Phase 1 并行)</div>
+        <div class="tl-phase">Phase 2 - iOS App + 服务器联调</div>
+        <div class="tl-title">iPhone App 中继 + ASR + LLM 接入</div>
+        <div class="tl-desc">Swift/SwiftUI App：CoreBluetooth 接收 + WebSocket 转发 → 服务器 FunASR 转写 + LLM 语义分析 + 预警下发。这是核心环节。</div>
+        <div class="tl-duration">预计 2-3 周（可与 Phase 1 并行）</div>
       </div>
       <div class="timeline-item">
         <div class="tl-phase">Phase 3 - 后端 + 管理后台</div>
-        <div class="tl-title">会话网关 + 预警推送 + 管理 Web</div>
-        <div class="tl-desc">WebSocket 会话网关、Prompt 注入管理、预警记录存储、管理员推送、简版管理后台</div>
+        <div class="tl-title">预警推送 + Webhook + 管理 Web</div>
+        <div class="tl-desc">WebSocket 服务完善、预警记录存储（SQLite）、管理员 Webhook 推送、简版管理后台</div>
         <div class="tl-duration">预计 2-3 周</div>
       </div>
       <div class="timeline-item">
         <div class="tl-phase">Phase 4 - 全链路 Demo</div>
-        <div class="tl-title">联调 + Prompt 调优 + Demo 展示</div>
-        <div class="tl-desc">硬件 + App + 云端全链路联调，Prompt 规则在真实场景中调优（用模拟对话测试各种场景），准备 Demo</div>
+        <div class="tl-title">联调 + System Prompt 调优 + Demo 展示</div>
+        <div class="tl-desc">硬件 + App + 服务器全链路联调，System Prompt 规则在真实场景中调优（用模拟对话测试各种场景），准备 Demo</div>
         <div class="tl-duration">预计 1-2 周</div>
       </div>
     </div>
     <div class="summary-box" style="margin-top: 24px;">
-      <h3>Demo 总周期：约 4-7 周（比 v1 更快）</h3>
-      <p><strong>v2 方案开发效率更高的原因：</strong>App 层大幅简化（去掉 ASR 引擎集成 + 去掉本地匹配引擎），核心逻辑变成 Prompt 编写（可快速迭代），不需要训练/部署任何本地模型。</p>
-      <p><strong>并行策略：</strong>Phase 1（硬件）和 Phase 2（App + 大模型）完全可以并行。App 开发阶段先用手机自带麦克风模拟音频输入，不依赖硬件完成。Phase 3 也可在 Phase 2 后期启动。</p>
-      <p><strong>快速 Demo 路径：</strong>如果只是给客户看效果，甚至可以先做一个纯 App Demo（手机麦克风采集 + 大模型分析），2-3 周就能展示。硬件集成后续补上。</p>
+      <h3>Demo 总周期：约 4-7 周</h3>
+      <p><strong>管道式 ASR + LLM 方案开发效率高的原因：</strong>App 层精简为纯中继（只需 CoreBluetooth + WebSocket），核心逻辑在服务器侧，System Prompt 可快速迭代，不需要训练/部署任何端侧模型。</p>
+      <p><strong>并行策略：</strong>Phase 1（硬件）和 Phase 2（App + 服务器）完全可以并行。App 开发阶段先用手机自带麦克风模拟音频输入，不依赖硬件完成。Phase 3 也可在 Phase 2 后期启动。</p>
+      <p><strong>快速验证路径：</strong>服务器已在 Spark2 运行，可先用 wscat 发送 PCM 数据验证 ASR + LLM 管道，再接入 iOS App 做端到端联调。</p>
     </div>
   </div>
 
@@ -1050,30 +910,30 @@
     <h2 class="section-title">成本估算 <span>Cost Estimate</span></h2>
     <div class="cost-grid">
       <div class="cost-item">
-        <div class="cost-label">ESP32-S3 模组</div>
-        <div class="cost-value">~18</div>
-        <div class="cost-unit">元 (N8R2)</div>
+        <div class="cost-label">XIAO nRF52840 Sense</div>
+        <div class="cost-value">~70</div>
+        <div class="cost-unit">元（含板载 PDM 麦克风）</div>
       </div>
       <div class="cost-item">
-        <div class="cost-label">INMP441 + LRA</div>
-        <div class="cost-value">~6</div>
+        <div class="cost-label">锂电池 + 充电模块</div>
+        <div class="cost-value">~15</div>
         <div class="cost-unit">元</div>
       </div>
       <div class="cost-item">
-        <div class="cost-label">电池 + 充电</div>
-        <div class="cost-value">~8</div>
-        <div class="cost-unit">元</div>
+        <div class="cost-label">外壳 + 配件</div>
+        <div class="cost-value">~20</div>
+        <div class="cost-unit">元（小批量）</div>
       </div>
       <div class="cost-item">
-        <div class="cost-label">PCB + 外壳</div>
-        <div class="cost-value">~25</div>
-        <div class="cost-unit">元 (小批量)</div>
+        <div class="cost-label">服务器（云端 LLM API）</div>
+        <div class="cost-value">~0.03-0.05</div>
+        <div class="cost-unit">元/分钟（按需计费）</div>
       </div>
     </div>
     <div class="summary-box" style="margin-top: 20px;">
-      <h3>硬件 BOM：约 55-70 元/台 (小批量)，量产可降至 40-50 元</h3>
-      <p><strong>云端调用成本（核心变化）：</strong>大模型流式语音约 0.03-0.05 元/分钟。一次 50 分钟咨询约 1.5-2.5 元。一个咨询师每天 4-6 次咨询约 6-15 元/天。10 个咨询师一个月约 1800-4500 元云端费用，完全可控。</p>
-      <p><strong>相比 v1 省下的成本：</strong>不需要端侧 ASR 模型适配和维护，不需要本地匹配引擎开发，App 开发人力减少约 60%。多出的是云端 LLM 调用费用，但这个费用远低于省下的人力成本。</p>
+      <h3>硬件 BOM：约 100-110 元/台（开发验证阶段）</h3>
+      <p><strong>ASR + LLM 调用成本：</strong>本地 FunASR 几乎零成本；云端 Whisper-compatible API 约 0.03-0.05 元/分钟。一次 50 分钟咨询约 1.5-2.5 元。10 个咨询师一个月约 1800-4500 元，完全可控。</p>
+      <p><strong>架构简洁带来的效率：</strong>不需要端侧 ASR 引擎集成，不需要本地匹配引擎开发，iOS App 只需做 BLE + WebSocket 纯中继，开发量大幅减少。</p>
     </div>
   </div>
 
@@ -1086,12 +946,12 @@
           <div class="card-icon amber">&#9888;</div>
           <div>
             <div class="card-title">网络依赖</div>
-            <div class="card-subtitle">v2 强依赖网络连接</div>
+            <div class="card-subtitle">服务器端强依赖网络连接</div>
           </div>
         </div>
         <div class="card-body">
           <ul>
-            <li><strong>风险</strong>：断网时完全无法工作（v1 有离线 ASR 兜底）</li>
+            <li><strong>风险</strong>：断网时完全无法工作，服务器不可达则无转写和预警</li>
             <li><strong>应对</strong>：心理咨询室通常有稳定 WiFi，断网概率很低</li>
             <li><strong>兜底</strong>：App 端可保留一个极轻量的本地关键词匹配作为断网降级方案</li>
             <li><strong>监控</strong>：App 实时检测网络状态，断网时提示咨询师</li>
@@ -1108,8 +968,8 @@
         </div>
         <div class="card-body">
           <ul>
-            <li><strong>风险</strong>：音频流经云端，比 v1 端侧处理的隐私保护弱</li>
-            <li><strong>应对</strong>：选择支持"数据不留存"的 API（豆包/阿里均支持）</li>
+            <li><strong>风险</strong>：音频流经网络，需保证传输加密和服务器安全</li>
+            <li><strong>应对</strong>：使用自建服务器（Spark2），音频不落盘，仅内存处理</li>
             <li><strong>加密</strong>：WebSocket TLS 加密传输，音频不在云端持久化</li>
             <li><strong>合规</strong>：来访者知情同意书中明确说明数据处理方式</li>
           </ul>
@@ -1155,12 +1015,11 @@
   <!-- Section 11: 总结 -->
   <div class="section">
     <div class="summary-box">
-      <h3>v2 方案总结 -- 云端大模型流式语音</h3>
-      <p><strong>核心变化：</strong>App 从"智能处理中心"降级为"纯音频中继"，所有智能逻辑（语音识别 + 语义理解 + 预警判断）全部由云端大模型一步完成。项链设备方案不变。</p>
-      <p><strong>最大优势：</strong>大模型天然具备上下文语义理解能力，能区分"真实自杀意念"和"学术讨论"，这是传统关键词匹配无法做到的。误报率将大幅降低，预警质量本质性提升。</p>
-      <p><strong>架构更简洁：</strong>去掉了端侧 ASR 引擎、AC 自动机匹配引擎，App 开发量减少约 60%。"词库管理"变成了"Prompt 管理"，更新规则不需要发版，改 Prompt 即刻生效。</p>
-      <p><strong>Demo 更快：</strong>可以先做一个"手机麦克风 + 大模型"的纯软件 Demo，2-3 周内就能给客户展示效果。硬件集成后续进行。</p>
-      <p><strong>成本可控：</strong>10 个咨询师每月云端费用约 1800-4500 元，远低于自建 ASR + NLP 的人力成本。</p>
+      <h3>v3.0 实现总结 -- 管道式 ASR + LLM</h3>
+      <p><strong>架构：</strong>XIAO nRF52840 Sense（PDM 采集）→ BLE Nordic UART Service → iPhone App（Swift/SwiftUI 纯中继）→ WebSocket → 服务器（FunASR 转写 + LLM 语义分析）→ 预警 JSON 下发。</p>
+      <p><strong>最大优势：</strong>LLM 天然具备上下文语义理解能力，能区分"真实自杀意念"和"学术讨论"，这是传统关键词匹配无法做到的。误报率大幅降低，预警质量本质性提升。</p>
+      <p><strong>灵活性：</strong>ASR 支持本地 FunASR 或任意 Whisper-compatible API（env 切换）；LLM 支持本地模型或任意 OpenAI-compatible API（通义/豆包/GPT-4 等改 env 即可）；Webhook 支持 Bark/钉钉/飞书/自定义 POST。</p>
+      <p><strong>当前状态：</strong>服务器已在 Spark2 运行（ws://150.158.146.192:6146），iOS App 代码已完成，待端到端联调验证。</p>
     </div>
   </div>
 
@@ -1181,8 +1040,6 @@
         <tr><td>服务器</td><td>云端 Whisper API 模式（ASR_PROVIDER=api）</td><td><span class="level-badge" style="background:rgba(16,185,129,0.15);color:#34d399;">已完成</span></td></tr>
         <tr><td>服务器</td><td>SQLite 预警 + 转写文本持久化</td><td><span class="level-badge" style="background:rgba(16,185,129,0.15);color:#34d399;">已完成</span></td></tr>
         <tr><td>服务器</td><td>管理员 Webhook 推送（高危）</td><td><span class="level-badge" style="background:rgba(16,185,129,0.15);color:#34d399;">已完成</span></td></tr>
-        <tr><td>硬件</td><td>振动马达预警反馈</td><td><span class="level-badge mid">规划中</span></td></tr>
-        <tr><td>硬件</td><td>Opus 音频压缩（降低 BLE 带宽）</td><td><span class="level-badge mid">规划中</span></td></tr>
         <tr><td>服务器</td><td>REST API 查询历史预警</td><td><span class="level-badge mid">规划中</span></td></tr>
         <tr><td>管理层</td><td>Web 管理后台（预警大屏 + 统计）</td><td><span class="level-badge low">待开发</span></td></tr>
         <tr><td>管理层</td><td>Prompt 规则可视化配置</td><td><span class="level-badge low">待开发</span></td></tr>
