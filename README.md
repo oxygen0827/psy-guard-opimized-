@@ -221,11 +221,25 @@ iPhone             psy-guard          讯飞 IAT          LLM
 
 ## 本地测试（无硬件）
 
-用电脑麦克风模拟音频输入：
+用电脑麦克风模拟音频输入，依赖安装：
+
+```bash
+pip install sounddevice websockets numpy
+```
+
+**macOS / Linux**：
+```bash
+# 直接连远程服务器测试
+python test_client.py ws://150.158.146.192:6146
+
+# 或本地启动服务器后连本地
+cd server && docker compose up -d --build && cd ..
+python test_client.py
+```
 
 **Windows（PowerShell）**：
 ```powershell
-# 启动服务器
+# 启动本地服务器
 cd server
 .\run.ps1
 
@@ -234,8 +248,6 @@ cd ..
 python test_client.py          # 连本地
 python test_client.py ws://150.158.146.192:6146  # 连 Spark2
 ```
-
-依赖安装：`pip install sounddevice websockets numpy`
 
 说出"我想死了"等关键词，观察是否触发预警。
 
@@ -267,4 +279,4 @@ python test_client.py ws://150.158.146.192:6146  # 连 Spark2
 - 建议在生产环境使用 WSS（TLS）加密传输
 - 音频数据不落盘，仅内存处理；SQLite 只存转写文本和预警记录
 
-> **可在serve.py的第335行修改vad_eos的值来调整语音转文字的延迟，建议在500到2000之间调节，过低会影响效果，目前设置为1500.**
+> **可在 server.py 第 335 行修改 `vad_eos` 的值来调整语音转文字的延迟，建议在 500 到 2000 之间调节，过低会影响效果，目前设置为 1500。**
