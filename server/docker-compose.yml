@@ -10,28 +10,35 @@ services:
       - PORT=8097
 
       # ── ASR 模式 ──────────────────────────────────────────
-      # local（默认）: 使用本机 FunASR WebSocket
-      # api: 使用 Whisper-compatible 云端 STT API
-      - ASR_PROVIDER=local
+      # local:   使用本机 FunASR WebSocket（需本地部署 FunASR）
+      # api:     使用 Whisper-compatible 云端 STT API
+      # xunfei:  讯飞实时语音转写（推荐，速度快、中文准确率高）
+      - ASR_PROVIDER=xunfei
 
-      # 本地模式 FunASR 地址
+      # 本地模式 FunASR 地址（ASR_PROVIDER=local 时生效）
       - FUNASR_WS_URL=ws://localhost:10095
 
       # API 模式 STT（ASR_PROVIDER=api 时生效）
-      # 兼容 OpenAI / 讯飞 / 阿里云 Whisper-compatible 端点
       #- ASR_API_URL=https://api.openai.com/v1
       #- ASR_API_KEY=sk-xxx
       #- ASR_MODEL=whisper-1
 
-      # ── LLM（两种模式通用，支持任意 OpenAI-compatible API）──
-      # 本地示例:
-      - LLM_BASE_URL=http://localhost:8086/v1
-      - LLM_MODEL=gemma-4-E4B-it-Q4_K_M.gguf
-      - LLM_API_KEY=none
-      # 通义千问示例（注释掉上面三行，取消下面注释）:
-      #- LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-      #- LLM_MODEL=qwen-turbo
-      #- LLM_API_KEY=sk-xxx
+      # ── 讯飞实时 ASR（ASR_PROVIDER=xunfei 时生效）──────────
+      # 登录 https://console.xfyun.cn → 创建应用 → 实时语音转写
+      - XUNFEI_APPID=baf02ba0
+      - XUNFEI_APISECRET=YjUwNzk0N2U5MWZlNzIzMGNmMjBlYTA2
+      - XUNFEI_APIKEY=2da75cd52e84fc0c09471cb5660532d7
+
+      # ── LLM（三种模式通用，支持任意 OpenAI-compatible API）──
+      # 阿里百炼 qwen-flash（推荐：速度快、成本低、中文效果好）
+      # 登录 https://bailian.console.aliyun.com → API-KEY 管理
+      - LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+      - LLM_MODEL=qwen-flash
+      - LLM_API_KEY=sk-216e0b0a6b3d4551a4983761b7fb4e1f
+      # 本地 LLM 示例（注释掉上面三行，取消下面注释）:
+      #- LLM_BASE_URL=http://localhost:8086/v1
+      #- LLM_MODEL=gemma-4-E4B-it-Q4_K_M.gguf
+      #- LLM_API_KEY=none
       # 豆包示例:
       #- LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
       #- LLM_MODEL=ep-xxx

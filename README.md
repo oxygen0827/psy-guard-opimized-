@@ -1,8 +1,8 @@
 # psy-guard
 
-心理咨询对话危机干预系统
+心理咨询室随身危机预警系统
 
-随身携带的硬件设备（XIAO nRF52840 Sense）持续采集咨询室音频，通过 BLE 实时传输至手机，手机中继到服务器进行语音识别和危机内容分析，检测到高风险内容时立即在咨询师手机上触发预警通知。
+咨询师佩戴 XIAO nRF52840 Sense，持续采集咨询室音频，通过 BLE 实时传至手机，手机中继到服务器进行流式语音识别和危机内容分析，检测到高风险内容时立即在咨询师手机上推送预警通知。
 
 ---
 
@@ -19,11 +19,10 @@
        │ ws://server:port
        ▼
 [psy-guard 服务器（Docker）]
-       │
-       ├─ ASR_PROVIDER=xunfei → 讯飞流式 IAT（推荐，边说边出字，延迟 2-4s）
-       ├─ ASR_PROVIDER=local  → FunASR WebSocket（本机，5秒窗口批量）
-       └─ ASR_PROVIDER=api    → Whisper-compatible 云端 API（5秒窗口批量）
-       │ 文字
+  ├─ ASR_PROVIDER=xunfei  → 讯飞流式 IAT（推荐，边说边出字）
+  ├─ ASR_PROVIDER=local   → FunASR WebSocket（本机部署）
+  └─ ASR_PROVIDER=api     → Whisper-compatible 云端 API
+       │ 文字（流式实时）
        ▼
   LLM 语义分析（OpenAI-compatible，本地/云端均可）
   + SQLite 持久化
@@ -32,6 +31,24 @@
        ▼
 [iPhone App] → 系统通知（锁屏可见）+ 预警列表 + 标记处理
 ```
+
+---
+
+## 工作流程
+
+```
+1. 咨询师佩戴设备，打开 iOS App，点击麦克风按钮
+2. App 通过 BLE 连接 XIAO，发送 0x01 指令开始录制
+3. XIAO 持续采集 PCM，BLE 分包推给手机（244字节/包）
+4. 手机缓冲 4KB 后通过 WebSocket 推给服务器
+5. 服务器将音频实时转发给讯飞 IAT，边说边收到转写文字
+6. 积累到 10 字或出现句尾标点，触发 LLM 语义分析
+7. LLM 检测到危机信号 → 服务器推送 alert JSON 给手机
+8. 手机触发系统通知（高危振动+声音，锁屏可见）
+9. 咨询师查看预警详情，点击"已处理"确认
+```
+
+**端到端延迟**：说话 → 预警通知，约 2-4 秒（讯飞流式模式）
 
 ---
 
@@ -50,10 +67,11 @@ psy-guard/
 │   ├── ContentView.swift       # SwiftUI 主界面
 │   └── PsyGuardApp.swift       # App 入口（通知权限申请）
 ├── server/
-│   ├── server.py               # WebSocket 服务（双模式 ASR + LLM）
+│   ├── server.py               # WebSocket 服务（三模式 ASR + LLM）
+│   ├── run.ps1                 # Windows 本地启动脚本（PowerShell）
 │   ├── Dockerfile
 │   └── docker-compose.yml
-├── architecture.html           # 系统架构图（浏览器打开）
+├── test_client.py              # 电脑麦克风测试客户端
 └── README.md
 ```
 
@@ -69,9 +87,7 @@ psy-guard/
 
 **Arduino 开发环境**
 
-开发板包：`Seeed nRF52 mbed-enabled Boards`（注意：必须是 mbed-enabled 版）
-
-依赖库：`ArduinoBLE`（库管理器安装）、`PDM`（mbed 版内置）
+开发板包：`Seeed nRF52 mbed-enabled Boards`（必须是 mbed-enabled 版，否则 PDM.h 不可用）
 
 **LED 状态**
 
@@ -98,9 +114,7 @@ psy-guard/
 **Xcode 工程搭建**
 
 1. 打开 `PsyGuard-iOS/PsyGuard.xcodeproj`
-2. `Info.plist` 确认已有以下权限：
-   - `NSBluetoothAlwaysUsageDescription`
-   - `NSBluetoothPeripheralUsageDescription`
+2. `Info.plist` 确认已有权限：`NSBluetoothAlwaysUsageDescription`、`NSBluetoothPeripheralUsageDescription`
 3. Signing & Capabilities → Background Modes → 勾选 `Uses Bluetooth LE accessories`
 4. 修改服务器地址（`ServerRelay.swift` 第 35 行）：
    ```swift
@@ -108,14 +122,15 @@ psy-guard/
    ```
 5. 真机运行（BLE 不支持模拟器）
 
-**功能说明**
+**预警等级**
 
-- 连接 XIAO 设备后点击麦克风按钮开始监听
-- 实时字幕显示转写内容，状态栏显示会话计时
-- 检测到危机内容时：高危触发系统通知 + 振动（锁屏可见），中危静默通知，低危仅 App 内显示
-- 每条预警显示关键词、原文、干预建议，可标记"已处理"
+| 等级 | 触发条件 | 通知方式 |
+|---|---|---|
+| `high` 高危 | 明确自杀/自伤/伤人意图 | 系统通知 + 振动声音（锁屏可见） |
+| `medium` 警示 | 强烈绝望感、咨询师疑似违规 | 静默通知 |
+| `low` 关注 | 持续负面情绪、需观察 | 仅 App 内显示 |
 
-**服务器推送的预警 JSON 格式**
+**服务器推送的预警 JSON**
 
 ```json
 {
@@ -129,147 +144,100 @@ psy-guard/
 }
 ```
 
-`level`：`high`（高危，红）/ `medium`（警示，橙）/ `low`（关注，黄）
-
 ---
 
 ## 服务器部署
 
-### 前置条件（本地模式）
+### 推荐方式：讯飞流式 ASR + 阿里百炼 LLM
 
-| 服务 | 地址 | 说明 |
-|---|---|---|
-| FunASR WebSocket | `localhost:10095` | 语音转文字（中文） |
-| LLM（OpenAI-compatible） | `localhost:8086/v1` | 危机内容分析 |
+编辑 `server/docker-compose.yml`，填入密钥：
 
-FunASR Docker 启动参考：
-```bash
-docker run -d --name funasr \
-  -p 10095:10095 \
-  registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
+```yaml
+- ASR_PROVIDER=xunfei
+- XUNFEI_APPID=your_appid
+- XUNFEI_APISECRET=your_apisecret
+- XUNFEI_APIKEY=your_apikey
+- LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+- LLM_MODEL=qwen-flash
+- LLM_API_KEY=sk-xxx
 ```
 
-### 启动
+启动：
 
 ```bash
 cd server
 docker compose up -d --build
+docker logs -f psy-guard
 ```
 
-### 配置（docker-compose.yml）
-
-**ASR 模式切换**（核心配置，三选一）：
+### 备用方式：本地 FunASR
 
 ```yaml
-# 讯飞流式模式（推荐）—— 边说边出字，端到端延迟 2-4s
-ASR_PROVIDER=xunfei
-XUNFEI_APPID=your_appid
-XUNFEI_APISECRET=your_apisecret
-XUNFEI_APIKEY=your_apikey
-
-# 本地模式（默认）—— FunASR WebSocket，5秒窗口批量识别
-ASR_PROVIDER=local
-FUNASR_WS_URL=ws://localhost:10095
-
-# 云端 API 模式 —— Whisper-compatible 端点，5秒窗口批量识别
-# 兼容：OpenAI / 阿里云 / 本地 Whisper 服务
-ASR_PROVIDER=api
-ASR_API_URL=https://api.openai.com/v1
-ASR_API_KEY=sk-xxx
-ASR_MODEL=whisper-1
+- ASR_PROVIDER=local
+- FUNASR_WS_URL=ws://localhost:10095
 ```
 
-**LLM 配置**（两种模式通用，支持任意 OpenAI-compatible API）：
-
-```yaml
-# 本地 LLM（默认）
-LLM_BASE_URL=http://localhost:8086/v1
-LLM_MODEL=gemma-4-E4B-it-Q4_K_M.gguf
-LLM_API_KEY=none
-
-# 通义千问
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen-turbo
-LLM_API_KEY=sk-xxx
-
-# 豆包
-LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-LLM_MODEL=ep-xxx
-LLM_API_KEY=xxx
+FunASR Docker 启动：
+```bash
+docker run -d --name funasr -p 10095:10095 \
+  registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
 ```
 
-**其他配置**：
+### 关键配置参数
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `8097` | WebSocket 监听端口 |
-| `STREAM_LLM_CHARS` | `10` | 流式模式：积累多少字触发 LLM（xunfei 模式） |
-| `WINDOW_SEC` | `5` | 批量模式：音频分析窗口（秒，local/api 模式） |
-| `MIN_TEXT_LEN` | `4` | 过短文本跳过 LLM（字符数） |
+| `STREAM_LLM_CHARS` | `10` | 积累多少字触发 LLM（流式模式） |
+| `MIN_TEXT_LEN` | `4` | 过短文本跳过分析 |
 | `CONTEXT_MAX_CHARS` | `300` | 滚动上下文历史长度 |
 | `DB_PATH` | `/data/psy-guard.db` | SQLite 路径，留空禁用持久化 |
-| `ADMIN_WEBHOOK_URL` | （空） | 高危预警推送 Webhook |
+| `ADMIN_WEBHOOK_URL` | （空） | 高危预警管理员推送 |
 
-**管理员 Webhook 示例**：
-
+**Webhook 示例**（高危时额外推送）：
 ```yaml
-# Bark iOS 推送
-ADMIN_WEBHOOK_URL=https://api.day.app/your-key
-
-# 钉钉机器人
-ADMIN_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxx
-
-# 飞书机器人
-ADMIN_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
-```
-
-### 查看日志
-
-```bash
-docker logs -f psy-guard
-```
-
-### 查看持久化数据
-
-```bash
-docker exec psy-guard sqlite3 /data/psy-guard.db \
-  "SELECT datetime(timestamp,'unixepoch','localtime'), level, keyword, text FROM alerts ORDER BY timestamp DESC LIMIT 20;"
+ADMIN_WEBHOOK_URL=https://api.day.app/your-bark-key   # Bark iOS
+ADMIN_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxx  # 钉钉
 ```
 
 ---
 
-## 数据流时序
-
-**讯飞流式模式（推荐）**
+## 数据流时序（讯飞流式模式）
 
 ```
-iPhone             psy-guard          讯飞 IAT         LLM
-  │──START──────────▶│──[建立持久连接]──▶│
-  │──[PCM chunk]────▶│──[40ms 音频]─────▶│
-  │──[PCM chunk]────▶│◀──[文字片段]───────│
-  │◀──transcript─────│  (实时字幕)        │──chat/completions──▶│
-  │──[PCM chunk]────▶│◀──[文字片段]───────│◀──{"level":"high"}──│
-  │◀──alert JSON─────│  (高危/中危预警)
-  │  系统通知+震动
-```
-
-**批量模式（local/api）**
-
-```
-iPhone             psy-guard          ASR              LLM
+iPhone             psy-guard          讯飞 IAT          LLM
   │──START──────────▶│
-  │──[PCM chunk]────▶│
-  │──[PCM chunk]────▶│  (缓冲 5 秒)
-  │                  │──[local] FunASR WS──▶│
-  │                  │   或                  │
-  │                  │──[api] Whisper POST──▶│
-  │                  │◀──{"text":"..."}──────│
-  │                  │──chat/completions──────────────▶│
-  │                  │◀──{"level":"high",...}───────────│
-  │◀──transcript─────│  (实时字幕)
-  │◀──alert JSON─────│  (高危/中危预警)
+  │──[PCM chunk]────▶│──[40ms 音频]───▶│
+  │──[PCM chunk]────▶│                  │──[中间结果]──▶│（积累中）
+  │──[PCM chunk]────▶│◀──[文字片段]─────│
+  │◀──transcript─────│                  │
+  │──[PCM chunk]────▶│◀──[文字片段]─────│──chat/completions──▶│
+  │                  │◀──{"level":"high",...}──────────────────│
+  │◀──alert JSON─────│
   │  系统通知+震动
 ```
+
+---
+
+## 本地测试（无硬件）
+
+用电脑麦克风模拟音频输入：
+
+**Windows（PowerShell）**：
+```powershell
+# 启动服务器
+cd server
+.\run.ps1
+
+# 另开窗口运行测试客户端
+cd ..
+python test_client.py          # 连本地
+python test_client.py ws://150.158.146.192:6146  # 连 Spark2
+```
+
+依赖安装：`pip install sounddevice websockets numpy`
+
+说出"我想死了"等关键词，观察是否触发预警。
 
 ---
 
@@ -281,13 +249,14 @@ iPhone             psy-guard          ASR              LLM
 | iOS | BLE 连接 + 中继 + 预警展示 | 完成 |
 | iOS | 系统本地通知（锁屏可见） | 完成 |
 | iOS | 实时字幕 + 会话计时 + 预警确认 | 完成 |
+| 服务器 | 讯飞流式 ASR（推荐） | 完成 |
 | 服务器 | FunASR 本地模式 | 完成 |
 | 服务器 | Whisper API 云端模式 | 完成 |
 | 服务器 | SQLite 持久化 | 完成 |
 | 服务器 | 管理员 Webhook 推送 | 完成 |
-| 硬件 | 振动马达预警反馈 | 规划中 |
-| 服务器 | REST API 查询历史 | 规划中 |
-| 管理层 | Web 管理后台 | 待开发 |
+| 服务器 | 断线自动重连 | 完成 |
+| 端到端 | 硬件联调验证 | 待完成 |
+| iOS | BLE 后台保持连接 | 待验证 |
 
 ---
 
@@ -297,3 +266,5 @@ iPhone             psy-guard          ASR              LLM
 - 部署前确保符合当地隐私法规，咨询双方需知情同意
 - 建议在生产环境使用 WSS（TLS）加密传输
 - 音频数据不落盘，仅内存处理；SQLite 只存转写文本和预警记录
+
+> **可在serve.py的第335行修改vad_eos的值来调整语音转文字的延迟，建议在500到2000之间调节，过低会影响效果，目前设置为1500.**
