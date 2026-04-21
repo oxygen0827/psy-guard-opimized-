@@ -19,10 +19,10 @@
        │ ws://server:port
        ▼
 [psy-guard 服务器（Docker）]
-  音频缓冲（5秒窗口）
        │
-       ├─ ASR_PROVIDER=local  → FunASR WebSocket（本机）
-       └─ ASR_PROVIDER=api    → Whisper-compatible 云端 API
+       ├─ ASR_PROVIDER=xunfei → 讯飞流式 IAT（推荐，边说边出字，延迟 2-4s）
+       ├─ ASR_PROVIDER=local  → FunASR WebSocket（本机，5秒窗口批量）
+       └─ ASR_PROVIDER=api    → Whisper-compatible 云端 API（5秒窗口批量）
        │ 文字
        ▼
   LLM 语义分析（OpenAI-compatible，本地/云端均可）
@@ -158,15 +158,21 @@ docker compose up -d --build
 
 ### 配置（docker-compose.yml）
 
-**ASR 模式切换**（核心配置，二选一）：
+**ASR 模式切换**（核心配置，三选一）：
 
 ```yaml
-# 本地模式（默认）—— FunASR WebSocket
+# 讯飞流式模式（推荐）—— 边说边出字，端到端延迟 2-4s
+ASR_PROVIDER=xunfei
+XUNFEI_APPID=your_appid
+XUNFEI_APISECRET=your_apisecret
+XUNFEI_APIKEY=your_apikey
+
+# 本地模式（默认）—— FunASR WebSocket，5秒窗口批量识别
 ASR_PROVIDER=local
 FUNASR_WS_URL=ws://localhost:10095
 
-# 云端 API 模式 —— Whisper-compatible 端点
-# 兼容：OpenAI / 讯飞 / 阿里云 / 本地 Whisper 服务
+# 云端 API 模式 —— Whisper-compatible 端点，5秒窗口批量识别
+# 兼容：OpenAI / 阿里云 / 本地 Whisper 服务
 ASR_PROVIDER=api
 ASR_API_URL=https://api.openai.com/v1
 ASR_API_KEY=sk-xxx
@@ -197,7 +203,8 @@ LLM_API_KEY=xxx
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `8097` | WebSocket 监听端口 |
-| `WINDOW_SEC` | `5` | 音频分析窗口（秒） |
+| `STREAM_LLM_CHARS` | `10` | 流式模式：积累多少字触发 LLM（xunfei 模式） |
+| `WINDOW_SEC` | `5` | 批量模式：音频分析窗口（秒，local/api 模式） |
 | `MIN_TEXT_LEN` | `4` | 过短文本跳过 LLM（字符数） |
 | `CONTEXT_MAX_CHARS` | `300` | 滚动上下文历史长度 |
 | `DB_PATH` | `/data/psy-guard.db` | SQLite 路径，留空禁用持久化 |
@@ -233,13 +240,26 @@ docker exec psy-guard sqlite3 /data/psy-guard.db \
 
 ## 数据流时序
 
+**讯飞流式模式（推荐）**
+
+```
+iPhone             psy-guard          讯飞 IAT         LLM
+  │──START──────────▶│──[建立持久连接]──▶│
+  │──[PCM chunk]────▶│──[40ms 音频]─────▶│
+  │──[PCM chunk]────▶│◀──[文字片段]───────│
+  │◀──transcript─────│  (实时字幕)        │──chat/completions──▶│
+  │──[PCM chunk]────▶│◀──[文字片段]───────│◀──{"level":"high"}──│
+  │◀──alert JSON─────│  (高危/中危预警)
+  │  系统通知+震动
+```
+
+**批量模式（local/api）**
+
 ```
 iPhone             psy-guard          ASR              LLM
   │──START──────────▶│
-  │                  │
   │──[PCM chunk]────▶│
   │──[PCM chunk]────▶│  (缓冲 5 秒)
-  │                  │
   │                  │──[local] FunASR WS──▶│
   │                  │   或                  │
   │                  │──[api] Whisper POST──▶│
