@@ -26,6 +26,7 @@ import io
 import json
 import logging
 import os
+import ssl
 import time
 import traceback
 import uuid
@@ -199,6 +200,20 @@ async def transcribe_api(pcm: bytes, session: aiohttp.ClientSession) -> str:
         return ""
 
 # ─────────────────────────────────────────────────────────────
+#  简单 VAD：基于 RMS 能量检测语音/静音
+# ─────────────────────────────────────────────────────────────
+import struct
+
+VAD_SILENCE_RMS    = int(os.getenv("VAD_SILENCE_RMS", "200"))    # RMS 低于此为静音
+VAD_SILENCE_SEC    = float(os.getenv("VAD_SILENCE_SEC", "0.8"))  # 静音持续多久触发断句
+
+def _rms(pcm: bytes) -> float:
+    if not pcm:
+        return 0.0
+    samples = struct.unpack_from(f"<{len(pcm)//2}h", pcm)
+    return (sum(s*s for s in samples) / len(samples)) ** 0.5
+
+# ─────────────────────────────────────────────────────────────
 #  讯飞鉴权 URL（HMAC-SHA256）
 # ─────────────────────────────────────────────────────────────
 _XUNFEI_HOST = "ws-api.xfyun.cn"
@@ -217,154 +232,196 @@ def _xunfei_auth_url() -> str:
     params = urlencode({"authorization": auth, "date": date, "host": _XUNFEI_HOST})
     return f"wss://{_XUNFEI_HOST}{_XUNFEI_PATH}?{params}"
 
+async def transcribe_xunfei(pcm: bytes) -> str:
+    """讯飞批处理识别：发送完整音频段，等待结果返回，无长连接。"""
+    log.info(f"[ASR/xunfei] {len(pcm)} bytes ({len(pcm)/SAMPLE_RATE/SAMPLE_WIDTH:.1f}s)")
+    _ssl = ssl.create_default_context()
+    _ssl.check_hostname = False
+    _ssl.verify_mode = ssl.CERT_NONE
+    try:
+        async with websockets.connect(
+            _xunfei_auth_url(), max_size=10*1024*1024, open_timeout=10, ssl=_ssl
+        ) as ws:
+            CHUNK = 1280
+            first = True
+            for i in range(0, len(pcm), CHUNK):
+                chunk = pcm[i:i+CHUNK]
+                if i == 0:
+                    status = 0
+                    frame = {
+                        "common": {"app_id": XUNFEI_APPID},
+                        "business": {"language": "zh_cn", "domain": "iat",
+                                     "accent": "mandarin", "dwa": "wpgs"},
+                        "data": {"status": status, "format": "audio/L16;rate=16000",
+                                 "encoding": "raw",
+                                 "audio": base64.b64encode(chunk).decode()},
+                    }
+                    first = False
+                elif i + CHUNK >= len(pcm):
+                    frame = {"data": {"status": 2, "format": "audio/L16;rate=16000",
+                                      "encoding": "raw",
+                                      "audio": base64.b64encode(chunk).decode()}}
+                else:
+                    frame = {"data": {"status": 1, "format": "audio/L16;rate=16000",
+                                      "encoding": "raw",
+                                      "audio": base64.b64encode(chunk).decode()}}
+                await ws.send(json.dumps(frame))
+                await asyncio.sleep(0.04)
+
+            # 收集结果
+            result_text = ""
+            async with asyncio.timeout(15):
+                async for msg in ws:
+                    data = json.loads(msg)
+                    code = data.get("code", -1)
+                    if code != 0:
+                        log.warning(f"[ASR/xunfei] code={code}")
+                        break
+                    ws_list = data.get("data", {}).get("result", {}).get("ws", [])
+                    for w in ws_list:
+                        for cw in w.get("cw", []):
+                            result_text += cw.get("w", "")
+                    if data.get("data", {}).get("status") == 2:
+                        break
+            log.info(f"[ASR/xunfei] result: {result_text!r}")
+            return result_text.strip()
+    except Exception as e:
+        log.error(f"[ASR/xunfei] Error: {e}")
+        return ""
+
 # ─────────────────────────────────────────────────────────────
 #  讯飞流式 ASR 会话（每个客户端一个持久 WebSocket 连接）
 # ─────────────────────────────────────────────────────────────
 class XunfeiStreamSession:
     """
     持久讯飞 IAT WebSocket 会话。
-    音频通过 feed() 写入，识别结果通过 on_text 回调实时返回。
-    讯飞单次会话最长约 60s，自动在 55s 时重连。
+    单一主循环处理连接、发送、接收和重连，避免竞态。
     """
     CHUNK_SIZE      = 1280   # 40ms @ 16kHz 16bit mono
     SESSION_MAX_SEC = 55     # 接近讯飞 60s 限制前重连
 
     def __init__(self, on_text):
-        # on_text(text: str) — 新识别到的文字片段（async callable）
-        self._on_text   = on_text
-        self._ws        = None
-        self._buf       = bytearray()
-        self._running   = False
-        self._first     = True
-        self._send_task = None
-        self._recv_task = None
-        self._t_start   = 0.0
-        self._reconnecting = False
+        self._on_text = on_text
+        self._buf     = bytearray()
+        self._running = False
+        self._task    = None
 
     async def start(self):
         self._running = True
-        await self._connect()
-
-    async def _connect(self):
-        url = _xunfei_auth_url()
-        self._ws      = await websockets.connect(url, max_size=10*1024*1024, open_timeout=10)
-        self._first   = True
-        self._t_start = time.time()
-        self._send_task = asyncio.create_task(self._send_loop())
-        self._recv_task = asyncio.create_task(self._recv_loop())
-        log.info("[ASR/stream] iFlytek session opened")
+        self._task = asyncio.create_task(self._run())
 
     async def feed(self, pcm: bytes):
-        """收到客户端音频，写入发送缓冲。"""
-        if not self._running:
-            return
-        self._buf.extend(pcm)
-        # 接近会话超时时自动重连
-        if not self._reconnecting and time.time() - self._t_start > self.SESSION_MAX_SEC:
-            asyncio.create_task(self._reconnect())
-
-    async def _reconnect(self):
-        self._reconnecting = True
-        log.info("[ASR/stream] session near timeout, reconnecting...")
-        await self._teardown(send_final=True)
-        self._reconnecting = False  # clear before _connect so new _send_loop can run
-        try:
-            await self._connect()
-        except Exception as e:
-            log.error(f"[ASR/stream] reconnect failed: {e}")
-
-    async def _reconnect_on_error(self):
-        """连接意外断开时重连（不发 status=2 结束帧）。"""
-        log.info("[ASR/stream] connection dropped, reconnecting...")
-        if self._recv_task and not self._recv_task.done():
-            self._recv_task.cancel()
-            try:
-                await asyncio.wait_for(self._recv_task, timeout=1)
-            except Exception:
-                pass
-        if self._ws:
-            try:
-                await self._ws.close()
-            except Exception:
-                pass
-        self._buf.clear()
-        self._reconnecting = False
         if self._running:
-            try:
-                await self._connect()
-            except Exception as e:
-                log.error(f"[ASR/stream] reconnect failed: {e}")
+            self._buf.extend(pcm)
 
-    async def _teardown(self, send_final=False):
-        if self._send_task:
-            self._send_task.cancel()
+    async def stop(self):
+        self._running = False
+        if self._task:
+            self._task.cancel()
             try:
-                await self._send_task
+                await self._task
             except asyncio.CancelledError:
                 pass
-        if send_final and self._ws and self._ws.close_code is None:
-            try:
-                frame = {"data": {"status": 2, "format": "audio/L16;rate=16000",
-                                  "encoding": "raw", "audio": ""}}
-                await asyncio.wait_for(self._ws.send(json.dumps(frame)), timeout=2)
-            except Exception:
-                pass
-        if self._recv_task:
-            try:
-                await asyncio.wait_for(self._recv_task, timeout=3)
-            except Exception:
-                pass
-        if self._ws:
-            try:
-                await self._ws.close()
-            except Exception:
-                pass
+        log.info("[ASR/stream] session closed")
 
-    async def _send_loop(self):
-        """以实时速度（40ms/块）向讯飞发送 PCM 音频。"""
-        while self._running and not self._reconnecting:
-            if len(self._buf) >= self.CHUNK_SIZE:
-                chunk = bytes(self._buf[:self.CHUNK_SIZE])
-                del self._buf[:self.CHUNK_SIZE]
-                status = 0 if self._first else 1
-                if self._first:
-                    frame = {
-                        "common": {"app_id": XUNFEI_APPID},
-                        "business": {
-                            "language": "zh_cn", "domain": "iat",
-                            "accent": "mandarin", "vad_eos": 1500,#（此处减小数值会使得实时转写语音更快）
-                        },
-                        "data": {
-                            "status": status,
-                            "format": "audio/L16;rate=16000",
-                            "encoding": "raw",
-                            "audio": base64.b64encode(chunk).decode(),
-                        },
-                    }
-                    self._first = False
-                else:
-                    frame = {
-                        "data": {
-                            "status": status,
-                            "format": "audio/L16;rate=16000",
-                            "encoding": "raw",
-                            "audio": base64.b64encode(chunk).decode(),
+    @staticmethod
+    def _make_ssl():
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
+    @staticmethod
+    def _comfort_noise() -> bytes:
+        """极低幅度噪声，保持连接活跃但不触发 VAD 语音识别。"""
+        import random
+        return bytes([random.randint(0, 1) for _ in range(XunfeiStreamSession.CHUNK_SIZE)])
+
+    async def _run(self):
+        """主循环：连接 → 持续发音频 → 断连自动重连，永不退出直到 stop()。"""
+        while self._running:
+            ws = None
+            try:
+                url = _xunfei_auth_url()
+                ws = await websockets.connect(
+                    url, max_size=10*1024*1024, open_timeout=10, ssl=self._make_ssl()
+                )
+                log.info("[ASR/stream] iFlytek session opened")
+                first    = True
+                t_start  = time.time()
+                recv_task = asyncio.create_task(self._recv_loop(ws))
+
+                while self._running:
+                    # 接近 55s 超时时主动断开重连
+                    if time.time() - t_start > self.SESSION_MAX_SEC:
+                        log.info("[ASR/stream] session timeout, reconnecting...")
+                        break
+
+                    chunk = None
+                    if len(self._buf) >= self.CHUNK_SIZE:
+                        chunk = bytes(self._buf[:self.CHUNK_SIZE])
+                        del self._buf[:self.CHUNK_SIZE]
+                    else:
+                        chunk = self._comfort_noise()
+
+                    status = 0 if first else 1
+                    if first:
+                        frame = {
+                            "common": {"app_id": XUNFEI_APPID},
+                            "business": {
+                                "language": "zh_cn", "domain": "iat",
+                                "accent": "mandarin", "vad_eos": 1000,
+                            },
+                            "data": {
+                                "status": status,
+                                "format": "audio/L16;rate=16000",
+                                "encoding": "raw",
+                                "audio": base64.b64encode(chunk).decode(),
+                            },
                         }
-                    }
-                try:
-                    await self._ws.send(json.dumps(frame))
-                except Exception as e:
-                    log.warning(f"[ASR/stream] send error: {e}")
-                    if self._running and not self._reconnecting:
-                        self._reconnecting = True
-                        asyncio.create_task(self._reconnect_on_error())
-                    break
-            await asyncio.sleep(0.04)
+                        first = False
+                    else:
+                        frame = {
+                            "data": {
+                                "status": status,
+                                "format": "audio/L16;rate=16000",
+                                "encoding": "raw",
+                                "audio": base64.b64encode(chunk).decode(),
+                            }
+                        }
+                    await ws.send(json.dumps(frame))
+                    await asyncio.sleep(0.04)
 
-    async def _recv_loop(self):
+                recv_task.cancel()
+                try:
+                    await recv_task
+                except Exception:
+                    pass
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+
+            except asyncio.CancelledError:
+                if ws:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                raise
+            except Exception as e:
+                log.warning(f"[ASR/stream] connection error: {e}, reconnecting in 1s...")
+                if ws:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                await asyncio.sleep(1)
+
+    async def _recv_loop(self, ws):
         """接收讯飞识别结果，实时回调。"""
         try:
-            async for msg in self._ws:
+            async for msg in ws:
                 data = json.loads(msg)
                 code = data.get("code", -1)
                 if code != 0:
@@ -379,39 +436,10 @@ class XunfeiStreamSession:
                 if text_chunk:
                     log.info(f"[ASR/stream] chunk: {text_chunk!r}")
                     asyncio.create_task(self._on_text(text_chunk))
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            if self._running and not self._reconnecting:
-                log.warning(f"[ASR/stream] recv error: {e}")
-                self._reconnecting = True
-                asyncio.create_task(self._reconnect_on_error())
-
-    async def stop(self):
-        """停止会话，等待剩余结果返回。"""
-        self._running = False
-        if self._send_task:
-            self._send_task.cancel()
-            try:
-                await self._send_task
-            except asyncio.CancelledError:
-                pass
-        # 发送结束帧
-        if self._ws and self._ws.close_code is None:
-            try:
-                frame = {"data": {"status": 2, "format": "audio/L16;rate=16000",
-                                  "encoding": "raw", "audio": ""}}
-                await asyncio.wait_for(self._ws.send(json.dumps(frame)), timeout=3)
-            except Exception:
-                pass
-            if self._recv_task:
-                try:
-                    await asyncio.wait_for(self._recv_task, timeout=5)
-                except Exception:
-                    pass
-            try:
-                await self._ws.close()
-            except Exception:
-                pass
-        log.info("[ASR/stream] session closed")
+            log.warning(f"[ASR/stream] recv error: {e}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -494,15 +522,16 @@ async def process_text(
     llm_sem: asyncio.Semaphore,
     session_id: str,
     db,
+    send_transcript: bool = True,
 ):
     if not text or len(text) < MIN_TEXT_LEN:
         return
 
-    # 转写结果推回客户端
-    try:
-        await websocket.send(json.dumps({"type": "transcript", "text": text}, ensure_ascii=False))
-    except Exception:
-        pass
+    if send_transcript:
+        try:
+            await websocket.send(json.dumps({"type": "transcript", "text": text}, ensure_ascii=False))
+        except Exception:
+            pass
 
     if db:
         try:
@@ -579,29 +608,42 @@ async def process_window(
 #  流式连接处理（ASR_PROVIDER=xunfei）
 # ─────────────────────────────────────────────────────────────
 async def handle_stream(websocket, db):
-    """讯飞持久流式 ASR：音频到了就转写，文字到了就分析。"""
-    client     = websocket.remote_address
-    session_id = str(uuid.uuid4())
+    """讯飞 VAD 批处理模式：本地 VAD 检测停顿，每段话发一次讯飞识别请求，无长连接。"""
+    client      = websocket.remote_address
+    session_id  = str(uuid.uuid4())
     context_buf: deque[str] = deque()
-    llm_sem    = asyncio.Semaphore(LLM_CONCURRENCY)
+    llm_sem     = asyncio.Semaphore(LLM_CONCURRENCY)
+    recording   = False
+    speech_buf  = bytearray()   # 当前语音段
+    silence_buf = bytearray()   # 静音缓冲（用于平滑）
+    in_speech   = False
+    silence_bytes = int(VAD_SILENCE_SEC * SAMPLE_RATE * SAMPLE_WIDTH)
 
-    # 文字积累缓冲：收到足够文字才触发 LLM
-    pending    = ""
-    asr_sess   = None
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = ssl.CERT_NONE
+    _conn = aiohttp.TCPConnector(ssl=_ssl_ctx)
+    async with aiohttp.ClientSession(connector=_conn) as http_session:
 
-    async with aiohttp.ClientSession() as http_session:
-
-        async def on_text(chunk: str):
-            nonlocal pending
-            pending += chunk
-            # 句尾标点或积累字数达阈值时触发分析
-            sentence_end = any(c in pending for c in "。！？!?")
-            if len(pending) >= STREAM_LLM_CHARS or sentence_end:
-                text_to_analyze = pending
-                pending = ""
+        async def flush_speech():
+            """把积累的语音段发给讯飞识别。"""
+            nonlocal speech_buf, in_speech, silence_buf
+            pcm = bytes(speech_buf)
+            speech_buf = bytearray()
+            silence_buf = bytearray()
+            in_speech = False
+            if len(pcm) < SAMPLE_RATE * SAMPLE_WIDTH // 2:  # 小于 0.5s 忽略
+                return
+            text = await transcribe_xunfei(pcm)
+            if text:
+                try:
+                    await websocket.send(json.dumps({"type": "transcript", "text": text}, ensure_ascii=False))
+                except Exception:
+                    pass
                 asyncio.create_task(
-                    process_text(http_session, websocket, text_to_analyze,
-                                 context_buf, llm_sem, session_id, db)
+                    process_text(http_session, websocket, text,
+                                 context_buf, llm_sem, session_id, db,
+                                 send_transcript=False)
                 )
 
         try:
@@ -609,47 +651,45 @@ async def handle_stream(websocket, db):
                 if isinstance(message, str):
                     cmd = message.strip().upper()
                     if cmd == "START":
-                        if asr_sess:
-                            await asr_sess.stop()
-                        asr_sess   = XunfeiStreamSession(on_text)
-                        pending    = ""
+                        recording   = True
+                        session_id  = str(uuid.uuid4())
+                        speech_buf  = bytearray()
+                        silence_buf = bytearray()
+                        in_speech   = False
                         context_buf.clear()
-                        session_id = str(uuid.uuid4())
-                        try:
-                            await asr_sess.start()
-                            await websocket.send("ACK:START")
-                            log.info(f"[WS] {client} START (stream) session={session_id[:8]}")
-                        except Exception as e:
-                            log.error(f"[WS] Failed to open iFlytek session: {e}")
-                            await websocket.send("ACK:START")  # 仍然 ACK，允许客户端继续
+                        await websocket.send("ACK:START")
+                        log.info(f"[WS] {client} START (vad) session={session_id[:8]}")
                     elif cmd == "STOP":
-                        if asr_sess:
-                            await asr_sess.stop()
-                            asr_sess = None
-                        # 分析剩余积累文字
-                        if pending and len(pending) >= MIN_TEXT_LEN:
-                            asyncio.create_task(
-                                process_text(http_session, websocket, pending,
-                                             context_buf, llm_sem, session_id, db)
-                            )
-                            pending = ""
+                        recording = False
+                        if in_speech and len(speech_buf) > 0:
+                            asyncio.create_task(flush_speech())
                         await websocket.send("ACK:STOP")
-                        log.info(f"[WS] {client} STOP (stream)")
+                        log.info(f"[WS] {client} STOP (vad)")
                     continue
 
-                if asr_sess and isinstance(message, bytes):
-                    await asr_sess.feed(message)
+                if not recording or not isinstance(message, bytes):
+                    continue
+
+                pcm_chunk = message
+                rms = _rms(pcm_chunk)
+
+                if rms >= VAD_SILENCE_RMS:
+                    # 有声音：把之前积累的静音也加入（平滑衔接），清空静音缓冲
+                    speech_buf.extend(silence_buf)
+                    silence_buf = bytearray()
+                    speech_buf.extend(pcm_chunk)
+                    in_speech = True
+                else:
+                    if in_speech:
+                        silence_buf.extend(pcm_chunk)
+                        # 静音超过阈值，触发识别
+                        if len(silence_buf) >= silence_bytes:
+                            asyncio.create_task(flush_speech())
 
         except websockets.exceptions.ConnectionClosed:
             log.info(f"[WS] Disconnected: {client}")
         except Exception as e:
             log.error(f"[WS] Error: {e}\n{traceback.format_exc()}")
-        finally:
-            if asr_sess:
-                try:
-                    await asr_sess.stop()
-                except Exception:
-                    pass
 
 # ─────────────────────────────────────────────────────────────
 #  批处理连接处理（local/api 模式）
@@ -663,7 +703,11 @@ async def handle_batch(websocket, db):
     context_buf: deque[str] = deque()
     llm_sem    = asyncio.Semaphore(LLM_CONCURRENCY)
 
-    async with aiohttp.ClientSession() as http_session:
+    _ssl_ctx2 = ssl.create_default_context()
+    _ssl_ctx2.check_hostname = False
+    _ssl_ctx2.verify_mode = ssl.CERT_NONE
+    _conn2 = aiohttp.TCPConnector(ssl=_ssl_ctx2)
+    async with aiohttp.ClientSession(connector=_conn2) as http_session:
         try:
             async for message in websocket:
                 if isinstance(message, str):

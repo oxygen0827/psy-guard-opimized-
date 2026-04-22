@@ -45,6 +45,11 @@ async def run(server_url: str):
     print(f"连接服务器: {server_url}")
     print("说话测试（Ctrl+C 退出）...\n")
 
+    # 绕过系统代理，直连本地服务器
+    import os
+    for v in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        os.environ.pop(v, None)
+
     async with websockets.connect(server_url, max_size=2**20, open_timeout=10) as ws:
         ack = await ws.send("START") or await asyncio.wait_for(ws.recv(), timeout=5)
         print(f"[服务器] {ack}")
@@ -55,7 +60,7 @@ async def run(server_url: str):
                     data = json.loads(msg)
                     t = data.get("type", "")
                     if t == "transcript":
-                        print(f"\r[转写] {data['text']}", flush=True)
+                        print(f"[转写] {data['text']}", flush=True)
                     elif t == "alert":
                         level_label = {"high": "🔴 高危", "medium": "🟠 警告", "low": "🟡 关注"}.get(
                             data.get("level", ""), "⚪"
@@ -85,10 +90,10 @@ async def run(server_url: str):
             try:
                 while not stop_flag.is_set():
                     try:
-                        pcm = audio_q.get(timeout=0.2)
+                        pcm = audio_q.get_nowait()
                         await ws.send(pcm)
                     except queue.Empty:
-                        pass
+                        await asyncio.sleep(0.02)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 pass
 
