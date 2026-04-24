@@ -101,7 +101,7 @@ async def broadcast_admin(msg: dict):
             await ws.send(text)
         except Exception:
             dead.add(ws)
-    admin_connections -= dead
+    admin_connections.difference_update(dead)
 
 # ─────────────────────────────────────────────────────────────
 #  System Prompt
@@ -881,6 +881,44 @@ async def start_http_server():
     log.info(f"[HTTP] Recording download server on port {HTTP_PORT}")
 
 # ─────────────────────────────────────────────────────────────
+#  HTTP GET /recording/{sid} on the same WS port（不依赖 8098）
+# ─────────────────────────────────────────────────────────────
+async def _process_request(connection, request):
+    """Intercept plain HTTP GET /recording/{sid} on port 8097."""
+    if not request.path.startswith("/recording/"):
+        return None  # proceed with WebSocket upgrade
+
+    from http import HTTPStatus
+    from websockets.http11 import Response as WsResponse
+    from websockets.datastructures import Headers as WsHeaders
+
+    sid = request.path[len("/recording/"):].strip("/")
+    if not sid or not all(c.isalnum() or c == "-" for c in sid):
+        return connection.respond(HTTPStatus.BAD_REQUEST, "Invalid session ID\n")
+    if not AUDIO_SAVE_DIR:
+        return connection.respond(HTTPStatus.SERVICE_UNAVAILABLE, "Audio saving disabled\n")
+    fpath = os.path.join(AUDIO_SAVE_DIR, f"{sid}.pcm")
+    if not os.path.exists(fpath):
+        return connection.respond(HTTPStatus.NOT_FOUND, "Recording not found\n")
+
+    with open(fpath, "rb") as f:
+        pcm_data = f.read()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(SAMPLE_WIDTH)
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes(pcm_data)
+    body = buf.getvalue()
+    return WsResponse(200, "OK", WsHeaders([
+        ("Content-Type", "audio/wav"),
+        ("Content-Disposition", f'attachment; filename="{sid}.wav"'),
+        ("Content-Length", str(len(body))),
+        ("Access-Control-Allow-Origin", "*"),
+    ]), body)
+
+
+# ─────────────────────────────────────────────────────────────
 #  启动
 # ─────────────────────────────────────────────────────────────
 async def main():
@@ -903,7 +941,7 @@ async def main():
     async def _handle(ws):
         await handle(ws, db)
 
-    async with websockets.serve(_handle, "0.0.0.0", PORT, max_size=2**20):
+    async with websockets.serve(_handle, "0.0.0.0", PORT, max_size=2**20, process_request=_process_request):
         await asyncio.Future()
 
 if __name__ == "__main__":
