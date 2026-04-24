@@ -32,8 +32,9 @@ bool isRecording = false;
 // ── PDM 回调（官方示例原样）──────────────────────────────────────────────────
 void onPDMdata() {
   int bytesAvailable = PDM.available();
-  PDM.read(sampleBuffer, bytesAvailable);
-  samplesRead = bytesAvailable / 2;
+  int toRead = min(bytesAvailable, (int)sizeof(sampleBuffer));
+  PDM.read(sampleBuffer, toRead);
+  samplesRead = toRead / 2;
 }
 
 // ── setup ────────────────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ void setup() {
 
   // PDM 初始化（官方示例原样）
   PDM.onReceive(onPDMdata);
-  // PDM.setGain(30);  // 可根据环境调整增益
+  PDM.setGain(30);  // 咨询室安静环境下适当提升增益，改善 ASR 信噪比
   if (!PDM.begin(1, 16000)) {
     Serial.println("PDM 初始化失败");
     while (1) yield();

@@ -18,6 +18,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>调试模式：用手机麦克风替代XIAO固件直接采集语音</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>用于连接心理咨询监测设备（XIAO nRF52840 Sense）</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>

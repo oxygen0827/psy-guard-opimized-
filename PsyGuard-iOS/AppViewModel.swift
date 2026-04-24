@@ -13,14 +13,19 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     @Published var bleConnected: Bool = false
     @Published var serverConnected: Bool = false
     @Published var transcript: String = ""
+    @Published var currentSentence: String = ""  // 讯飞实时中间结果
 
     // 会话计时
     @Published var sessionDurationText: String = ""
 
+    // 调试开关：用手机麦克风替代 XIAO 固件
+    @Published var usePhoneMic: Bool = false
+
     // MARK: - Private
 
-    private let bleManager = BLEManager()
-    private let relay = ServerRelay()
+    private let bleManager  = BLEManager()
+    private let relay       = ServerRelay()
+    private let micCapture  = MicCapture()
     private var sessionStart: Date?
     private var sessionTimer: Timer?
 
@@ -40,14 +45,36 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
 
     func toggleRecording() {
         isRecording.toggle()
-        bleManager.sendControl(isRecording)
         if isRecording {
-            startSession()
             relay.sendStart()
+            if usePhoneMic {
+                startMicCapture()
+            } else {
+                bleManager.sendControl(true)
+            }
+            startSession()
         } else {
+            if usePhoneMic {
+                micCapture.stop()
+            } else {
+                bleManager.sendControl(false)
+            }
+            relay.flushAndStop()
             endSession()
-            relay.flushRemaining()
-            relay.sendStop()
+        }
+    }
+
+    private func startMicCapture() {
+        micCapture.onChunk = { [weak self] data in
+            self?.relay.sendAudioChunk(data)
+        }
+        micCapture.requestAndStart { [weak self] granted in
+            if !granted {
+                self?.isRecording = false
+                self?.relay.sendStop()
+                self?.endSession()
+                self?.bleStatus = "麦克风权限被拒绝"
+            }
         }
     }
 
@@ -66,6 +93,7 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     private func startSession() {
         sessionStart = Date()
         transcript = ""
+        currentSentence = ""
         sessionDurationText = "00:00"
         sessionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self, let start = self.sessionStart else { return }
@@ -90,7 +118,7 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
         switch alert.level {
         case .high:
             content.title = "高危预警"
-            content.sound = .defaultCritical
+            content.sound = .default
         case .medium:
             content.title = "警告"
             content.sound = .default
@@ -119,8 +147,13 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
         DispatchQueue.main.async { [weak self] in
             switch state {
             case .idle:
-                self?.bleStatus = "扫描中..."
+                self?.bleStatus = "未连接"
                 self?.bleConnected = false
+                if self?.isRecording == true {
+                    self?.isRecording = false
+                    self?.relay.flushAndStop()
+                    self?.endSession()
+                }
             case .scanning:
                 self?.bleStatus = "扫描中..."
                 self?.bleConnected = false
@@ -174,10 +207,19 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     func relayDidReceiveTranscript(_ text: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.transcript += text
-            if self.transcript.count > 500 {
-                self.transcript = String(self.transcript.suffix(500))
+            self.currentSentence = ""  // 句子已确认，清除中间结果
+            if !text.isEmpty {
+                self.transcript += text
+                if self.transcript.count > 500 {
+                    self.transcript = String(self.transcript.suffix(500))
+                }
             }
+        }
+    }
+
+    func relayDidReceiveInterim(_ text: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.currentSentence = text
         }
     }
 }

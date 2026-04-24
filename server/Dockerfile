@@ -3,6 +3,8 @@ FROM python:3.11-slim
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
     websockets==12.0 \
     aiohttp==3.9.5 \
     aiosqlite==0.20.0

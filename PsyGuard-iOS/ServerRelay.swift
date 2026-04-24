@@ -39,21 +39,22 @@ protocol ServerRelayDelegate: AnyObject {
     func relayDidDisconnect()
     func relayDidReceiveAlert(_ alert: AlertMessage)
     func relayDidReceiveTranscript(_ text: String)
+    func relayDidReceiveInterim(_ text: String)
 }
 
 final class ServerRelay: NSObject {
 
-    private let serverURL = URL(string: "ws://150.158.146.192:6146")!
+    private let serverURL = URL(string: "ws://150.158.146.192:8097")!
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession: URLSession!
-    private var reconnectTimer: Timer?
 
     weak var delegate: ServerRelayDelegate?
     private(set) var isConnected = false
+    private var stopped = false   // 主动调用 disconnect() 时置 true，阻止自动重连
 
-    // 发送缓冲：BLE 包很小，积攒一定量再发，减少 WebSocket 帧数
+    // 发送缓冲：积攒约 50ms 的音频再发，平衡延迟和帧数
     private var sendBuffer = Data()
-    private let bufferThreshold = 4096  // 4KB 触发一次发送
+    private let bufferThreshold = 1600  // ~50ms @ 16kHz 16-bit mono
     private let bufferQueue = DispatchQueue(label: "relay.buffer")
 
     override init() {
@@ -64,6 +65,7 @@ final class ServerRelay: NSObject {
     // MARK: - Public API
 
     func connect() {
+        stopped = false
         guard !isConnected else { return }
         let request = URLRequest(url: serverURL)
         webSocketTask = urlSession.webSocketTask(with: request)
@@ -72,7 +74,7 @@ final class ServerRelay: NSObject {
     }
 
     func disconnect() {
-        reconnectTimer?.invalidate()
+        stopped = true
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         isConnected = false
     }
@@ -83,6 +85,15 @@ final class ServerRelay: NSObject {
 
     func sendStop() {
         webSocketTask?.send(.string("STOP")) { _ in }
+    }
+
+    /// 先刷缓冲，再发 STOP，保证服务器在收到 STOP 前已处理最后一帧音频
+    func flushAndStop() {
+        bufferQueue.async { [weak self] in
+            guard let self else { return }
+            self.flushBuffer()
+            self.webSocketTask?.send(.string("STOP")) { _ in }
+        }
     }
 
     /// BLE 收到音频块 -> 进缓冲区 -> 达到阈值后发给服务器
@@ -96,12 +107,7 @@ final class ServerRelay: NSObject {
         }
     }
 
-    /// 强制刷新缓冲（停止录音时调用）
-    func flushRemaining() {
-        bufferQueue.async { [weak self] in
-            self?.flushBuffer()
-        }
-    }
+
 
     // MARK: - Private
 
@@ -153,6 +159,12 @@ final class ServerRelay: NSObject {
             return
         }
 
+        if type == "interim" {
+            let text = dict["text"] as? String ?? ""
+            DispatchQueue.main.async { self.delegate?.relayDidReceiveInterim(text) }
+            return
+        }
+
         guard type == "alert" else { return }
         let level = AlertMessage.AlertLevel(rawValue: dict["level"] as? String ?? "low") ?? .low
         let keyword    = dict["keyword"]    as? String ?? ""
@@ -169,7 +181,7 @@ final class ServerRelay: NSObject {
         DispatchQueue.main.async {
             self.delegate?.relayDidDisconnect()
         }
-        // 5 秒后自动重连
+        guard !stopped else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             self?.connect()
         }

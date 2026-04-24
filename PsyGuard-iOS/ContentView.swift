@@ -59,21 +59,33 @@ struct ContentView: View {
     // MARK: - 录音按钮
 
     private var recordButton: some View {
-        Button(action: { vm.toggleRecording() }) {
-            VStack(spacing: 8) {
-                Image(systemName: vm.isRecording ? "mic.fill" : "mic")
-                    .font(.system(size: 48))
-                    .foregroundStyle(vm.isRecording ? .red : .primary)
-                    .symbolEffect(.pulse, isActive: vm.isRecording)
-                Text(vm.isRecording ? "录制中 - 点击停止" : "点击开始监听")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 12) {
+            // 调试切换：手机麦克风 vs XIAO 固件
+            Toggle(isOn: $vm.usePhoneMic) {
+                Label("手机麦克风（调试）", systemImage: "iphone.radiwaves.left.and.right")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
+            .toggleStyle(.switch)
+            .padding(.horizontal, 24)
+            .disabled(vm.isRecording)
+
+            Button(action: { vm.toggleRecording() }) {
+                VStack(spacing: 8) {
+                    Image(systemName: vm.isRecording ? "mic.fill" : "mic")
+                        .font(.system(size: 48))
+                        .foregroundStyle(vm.isRecording ? .red : .primary)
+                        .symbolEffect(.pulse, isActive: vm.isRecording)
+                    Text(vm.isRecording ? "录制中 - 点击停止" : "点击开始监听")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .disabled(vm.usePhoneMic ? !vm.serverConnected : (!vm.bleConnected || !vm.serverConnected))
+            .opacity((vm.usePhoneMic ? vm.serverConnected : (vm.bleConnected && vm.serverConnected)) ? 1 : 0.4)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 28)
-        .disabled(!vm.bleConnected)
-        .opacity(vm.bleConnected ? 1 : 0.4)
     }
 
     // MARK: - 实时字幕
@@ -83,12 +95,29 @@ struct ContentView: View {
             if vm.isRecording || !vm.transcript.isEmpty {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        Text(vm.transcript.isEmpty ? "等待语音..." : vm.transcript)
-                            .font(.footnote)
-                            .foregroundStyle(vm.transcript.isEmpty ? .secondary : .primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .id("bottom")
+                        VStack(alignment: .leading, spacing: 2) {
+                            if vm.transcript.isEmpty && vm.currentSentence.isEmpty {
+                                Text("等待语音...")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                if !vm.transcript.isEmpty {
+                                    Text(vm.transcript)
+                                        .font(.footnote)
+                                        .foregroundStyle(.primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                if !vm.currentSentence.isEmpty {
+                                    Text(vm.currentSentence)
+                                        .font(.footnote)
+                                        .foregroundStyle(.orange)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .id("bottom")
                     }
                     .frame(height: 76)
                     .background(Color(.secondarySystemGroupedBackground))
@@ -96,6 +125,9 @@ struct ContentView: View {
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                     .onChange(of: vm.transcript) { _, _ in
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    .onChange(of: vm.currentSentence) { _, _ in
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }

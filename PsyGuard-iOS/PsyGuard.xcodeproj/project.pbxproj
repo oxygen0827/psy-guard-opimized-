@@ -13,6 +13,7 @@
 		BLEMANAGERBF /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BLEMANAGER /* BLEManager.swift */; };
 		CONTENTVIEWBF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CONTENTVIEW /* ContentView.swift */; };
 		SERVERRELAYBF /* ServerRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = SERVERRELAY /* ServerRelay.swift */; };
+		MICCAPTUREBF /* MicCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = MICCAPTURE /* MicCapture.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		CONTENTVIEW /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		INFOPLIST /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		SERVERRELAY /* ServerRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRelay.swift; sourceTree = "<group>"; };
+		MICCAPTURE /* MicCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicCapture.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -70,6 +72,7 @@
 				BLEMANAGER /* BLEManager.swift */,
 				SERVERRELAY /* ServerRelay.swift */,
 				APPVIEWMODEL /* AppViewModel.swift */,
+				MICCAPTURE /* MicCapture.swift */,
 			);
 			name = Sources;
 			sourceTree = "<group>";
@@ -157,6 +160,7 @@
 				BLEMANAGERBF /* BLEManager.swift in Sources */,
 				SERVERRELAYBF /* ServerRelay.swift in Sources */,
 				APPVIEWMODELBF /* AppViewModel.swift in Sources */,
+				MICCAPTUREBF /* MicCapture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -171,7 +175,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				DEVELOPMENT_TEAM = Q3QJW3VT7L;
+				DEVELOPMENT_TEAM = 9Q9WT892Y4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -185,7 +189,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.psyguard.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hushaohong.psyguard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -201,7 +205,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				DEVELOPMENT_TEAM = Q3QJW3VT7L;
+				DEVELOPMENT_TEAM = 9Q9WT892Y4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -215,7 +219,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.psyguard.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hushaohong.psyguard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

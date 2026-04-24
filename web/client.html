@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PsyGuard · 语音演示</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --border: #e8eaed;
+      --text: #1c1e21;
+      --text-muted: #6b7280;
+      --blue: #2563eb;
+      --red: #dc2626;
+      --orange: #ea580c;
+      --orange-light: #fff7ed;
+      --yellow: #ca8a04;
+      --yellow-light: #fefce8;
+      --green: #16a34a;
+      --radius: 12px;
+      --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.05);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo { font-size: 22px; line-height: 1; }
+    .brand { font-size: 16px; font-weight: 700; color: var(--text); }
+    .brand-sub { font-size: 12px; color: var(--text-muted); margin-left: 8px; font-weight: 400; }
+    header .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 12px; font-weight: 500;
+    }
+    .pill-gray  { background: #f3f4f6; color: var(--text-muted); }
+    .pill-green { background: #dcfce7; color: var(--green); }
+    .pill-red   { background: #fee2e2; color: var(--red); }
+    .pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    /* ── Layout ── */
+    .page { max-width: 960px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; }
+    .row-2 { display: grid; grid-template-columns: 1fr 200px; gap: 16px; }
+    @media (max-width: 600px) { .row-2 { grid-template-columns: 1fr; } }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+    .card-label {
+      font-size: 11px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 14px;
+    }
+
+    /* ── Connection bar ── */
+    .conn-bar { display: flex; gap: 8px; align-items: center; }
+    .conn-bar input {
+      flex: 1; border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 12px; font-size: 13px; color: var(--text);
+      outline: none; transition: border-color .15s;
+      background: #fafafa;
+    }
+    .conn-bar input:focus { border-color: var(--blue); background: #fff; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 8px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: all .15s; white-space: nowrap;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-blue  { background: var(--blue); color: #fff; }
+    .btn-blue:not(:disabled):hover  { background: #1d4ed8; }
+    .btn-red   { background: var(--red); color: #fff; }
+    .btn-red:not(:disabled):hover   { background: #b91c1c; }
+    .btn-ghost { background: #f3f4f6; color: var(--text-muted); }
+    .btn-ghost:not(:disabled):hover { background: var(--border); }
+
+    /* ── Record button ── */
+    .record-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0; }
+    .record-btn {
+      width: 68px; height: 68px; border-radius: 50%; border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 26px; transition: all .2s; position: relative;
+    }
+    .record-btn.idle { background: var(--blue); box-shadow: 0 4px 16px rgba(37,99,235,.35); }
+    .record-btn.idle:not(:disabled):hover { transform: scale(1.06); box-shadow: 0 6px 20px rgba(37,99,235,.45); }
+    .record-btn.rec  { background: var(--red);  box-shadow: 0 4px 16px rgba(220,38,38,.35); animation: ripple 1.6s ease-in-out infinite; }
+    .record-btn:disabled { background: #e5e7eb; box-shadow: none; cursor: not-allowed; }
+    @keyframes ripple {
+      0%,100% { box-shadow: 0 4px 16px rgba(220,38,38,.35); }
+      50%      { box-shadow: 0 4px 24px rgba(220,38,38,.6), 0 0 0 10px rgba(220,38,38,.08); }
+    }
+    .record-hint { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Stats ── */
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .stat-box { background: var(--bg); border-radius: 8px; padding: 12px 14px; }
+    .stat-num { font-size: 26px; font-weight: 700; line-height: 1.1; }
+    .stat-key { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .stat-box.sentences .stat-num { color: var(--blue); }
+    .stat-box.alerts    .stat-num { color: var(--red); }
+
+    /* ── Transcript ── */
+    .transcript-scroll {
+      min-height: 140px; max-height: 280px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 4px;
+      padding-right: 4px;
+    }
+    .transcript-scroll::-webkit-scrollbar { width: 4px; }
+    .transcript-scroll::-webkit-scrollbar-track { background: transparent; }
+    .transcript-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    .t-line { padding: 5px 8px; border-radius: 6px; font-size: 14px; line-height: 1.6; }
+    .t-final   { color: var(--text); }
+    .t-interim { color: var(--orange); font-style: italic; background: var(--orange-light); }
+    .t-empty   { color: var(--text-muted); font-style: italic; font-size: 13px; padding: 20px 0; text-align: center; }
+
+    /* ── Alert list ── */
+    .alert-list { display: flex; flex-direction: column; gap: 8px; }
+    .alert-card {
+      border-radius: 8px; padding: 12px 14px;
+      border-left: 3px solid;
+    }
+    .alert-card.high   { background: #fef2f2; border-color: var(--red);    }
+    .alert-card.medium { background: var(--orange-light); border-color: var(--orange); }
+    .alert-card.low    { background: var(--yellow-light); border-color: var(--yellow); }
+    .alert-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .alert-badge {
+      font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .badge-high   { background: var(--red);    color: #fff; }
+    .badge-medium { background: var(--orange); color: #fff; }
+    .badge-low    { background: var(--yellow); color: #fff; }
+    .alert-kw   { font-size: 13px; font-weight: 600; }
+    .alert-body { font-size: 13px; color: #374151; margin-bottom: 4px; }
+    .alert-sug  { font-size: 12px; color: var(--text-muted); }
+    .alert-time { font-size: 11px; color: #9ca3af; margin-top: 4px; }
+    .empty-hint { color: var(--text-muted); font-size: 13px; font-style: italic; text-align: center; padding: 16px 0; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">🛡️</span>
+  <span class="brand">PsyGuard</span>
+  <span class="brand-sub">语音演示</span>
+  <div class="right">
+    <span class="pill pill-gray" id="statusPill">
+      <span class="pill-dot"></span>
+      <span id="statusText">未连接</span>
+    </span>
+  </div>
+</header>
+
+<div class="page">
+  <!-- 连接 -->
+  <div class="card">
+    <div class="card-label">服务器</div>
+    <div class="conn-bar">
+      <input type="text" id="urlInput" value="ws://150.158.146.192:8097" placeholder="ws://host:port">
+      <button class="btn btn-blue" id="connBtn" onclick="toggleConnect()">连接</button>
+    </div>
+  </div>
+
+  <div class="row-2">
+    <!-- 录音控制 -->
+    <div class="card">
+      <div class="card-label">录音控制</div>
+      <div class="record-wrap">
+        <button class="record-btn idle" id="recordBtn" onclick="toggleRecording()" disabled>🎙️</button>
+        <span class="record-hint" id="recordHint">连接服务器后可录音</span>
+      </div>
+    </div>
+
+    <!-- 统计 -->
+    <div class="card">
+      <div class="card-label">本次统计</div>
+      <div class="stat-grid">
+        <div class="stat-box sentences">
+          <div class="stat-num" id="cntSentence">0</div>
+          <div class="stat-key">识别句</div>
+        </div>
+        <div class="stat-box alerts">
+          <div class="stat-num" id="cntAlert">0</div>
+          <div class="stat-key">预警数</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 实时转写 -->
+  <div class="card">
+    <div class="card-label">实时转写</div>
+    <div class="transcript-scroll" id="transcriptBox">
+      <div class="t-empty">等待语音输入…</div>
+    </div>
+  </div>
+
+  <!-- 预警 -->
+  <div class="card">
+    <div class="card-label">预警记录</div>
+    <div class="alert-list" id="alertList">
+      <div class="empty-hint">暂无预警</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let ws = null;
+  let audioCtx = null;
+  let micStream = null;
+  let processor = null;
+  let recording = false;
+  let nSentences = 0;
+  let nAlerts = 0;
+  const finalLines = [];   // confirmed sentences
+  let interimText = '';
+  let recordStartTime = 0;
+  let recordTimerId = null;
+
+  // ── WebSocket ──────────────────────────────────────────────
+  function toggleConnect() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    } else {
+      doConnect();
+    }
+  }
+
+  function doConnect() {
+    const url = document.getElementById('urlInput').value.trim();
+    setStatus('连接中…', 'gray');
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => {
+      setStatus('已连接', 'green');
+      document.getElementById('connBtn').textContent = '断开';
+      document.getElementById('connBtn').className = 'btn btn-red';
+      document.getElementById('recordBtn').disabled = false;
+      document.getElementById('recordHint').textContent = '点击开始录音';
+    };
+    ws.onclose = () => {
+      setStatus('已断开', 'red');
+      document.getElementById('connBtn').textContent = '连接';
+      document.getElementById('connBtn').className = 'btn btn-blue';
+      if (recording) stopRecording(false);  // must come before disabling button + hint override
+      document.getElementById('recordBtn').disabled = true;
+      document.getElementById('recordHint').textContent = '连接服务器后可录音';
+    };
+    ws.onerror = () => setStatus('连接失败', 'red');
+    ws.onmessage = onMessage;
+  }
+
+  function onMessage(evt) {
+    if (typeof evt.data !== 'string') return;
+    if (evt.data.startsWith('ACK:')) return;
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+
+    if (msg.type === 'interim') {
+      interimText = msg.text;
+      renderTranscript();
+    } else if (msg.type === 'transcript') {
+      finalLines.push(msg.text);
+      nSentences++;
+      interimText = '';
+      document.getElementById('cntSentence').textContent = nSentences;
+      renderTranscript();
+    } else if (msg.type === 'alert') {
+      nAlerts++;
+      document.getElementById('cntAlert').textContent = nAlerts;
+      prependAlert(msg);
+    }
+  }
+
+  // ── Transcript rendering ───────────────────────────────────
+  function renderTranscript() {
+    const box = document.getElementById('transcriptBox');
+    const last20 = finalLines.slice(-20);
+    if (!last20.length && !interimText) {
+      box.innerHTML = `<div class="t-empty">${recording ? '正在聆听，请说话…' : '等待语音输入…'}</div>`;
+      return;
+    }
+    box.innerHTML = last20.map(s => `<div class="t-line t-final">${esc(s)}</div>`).join('') +
+      (interimText ? `<div class="t-line t-interim">${esc(interimText)}…</div>` : '');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  // ── Alert rendering ────────────────────────────────────────
+  function prependAlert(alert) {
+    const list = document.getElementById('alertList');
+    const empty = list.querySelector('.empty-hint');
+    if (empty) empty.remove();
+    const labels = { high: '高危', medium: '警示', low: '关注' };
+    const timeStr = new Date(alert.timestamp * 1000).toLocaleTimeString('zh-CN');
+    const div = document.createElement('div');
+    div.className = `alert-card ${alert.level}`;
+    div.innerHTML = `
+      <div class="alert-head">
+        <span class="alert-badge badge-${alert.level}">${labels[alert.level] || alert.level}</span>
+        <span class="alert-kw">「${esc(alert.keyword || '')}」</span>
+      </div>
+      <div class="alert-body">${esc(alert.text || '')}</div>
+      ${alert.suggestion ? `<div class="alert-sug">💡 ${esc(alert.suggestion)}</div>` : ''}
+      <div class="alert-time">${timeStr}</div>
+    `;
+    list.insertBefore(div, list.firstChild);
+  }
+
+  // ── Recording ──────────────────────────────────────────────
+  async function toggleRecording() {
+    if (recording) {
+      stopRecording(true);
+    } else {
+      try {
+        await startRecording();
+      } catch (e) {
+        alert('录音启动失败：' + e.message);
+      }
+    }
+  }
+
+  async function startRecording() {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+      alert('无法访问麦克风：' + e.message);
+      return;
+    }
+
+    // All steps after getUserMedia are wrapped — clean up mic if anything fails
+    try {
+      // Try native 16kHz; fall back to device default rate with manual resampling
+      try {
+        audioCtx = new AudioContext({ sampleRate: 16000 });
+      } catch {
+        audioCtx = new AudioContext();
+      }
+      const nativeRate = audioCtx.sampleRate;
+
+      const src = audioCtx.createMediaStreamSource(micStream);
+      processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (e) => {
+        if (!recording) return;
+        const float32 = e.inputBuffer.getChannelData(0);
+        const data = nativeRate === 16000
+          ? float32ToInt16(float32)
+          : float32ToInt16(downsample(float32, nativeRate, 16000));
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(data.buffer);
+      };
+      src.connect(processor);
+      // Route to silent sink — prevents mic feedback through speakers
+      processor.connect(audioCtx.createMediaStreamDestination());
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // WS closed between button click and audio setup
+        throw new Error('服务器连接已断开');
+      }
+      ws.send('START');
+      recording = true;
+      recordStartTime = Date.now();
+      setRecordUI(true);
+    } catch (e) {
+      // Clean up audio resources before re-throwing
+      if (micStream)  { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      if (audioCtx)   { audioCtx.close().catch(() => {}); audioCtx = null; }
+      if (processor)  { try { processor.disconnect(); } catch {} processor = null; }
+      throw e;
+    }
+  }
+
+  function stopRecording(sendStop = true) {
+    recording = false;
+    clearInterval(recordTimerId); recordTimerId = null;
+    if (processor) { try { processor.disconnect(); } catch {} processor = null; }
+    if (audioCtx)  { try { audioCtx.close(); }      catch {} audioCtx = null; }
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (sendStop && ws && ws.readyState === WebSocket.OPEN) ws.send('STOP');
+    interimText = '';
+    renderTranscript();
+    setRecordUI(false);
+  }
+
+  function fmtDuration(ms) {
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    return m ? `${m}:${String(s % 60).padStart(2, '0')}` : `${s}s`;
+  }
+
+  function setRecordUI(isRec) {
+    const btn  = document.getElementById('recordBtn');
+    const hint = document.getElementById('recordHint');
+    if (isRec) {
+      btn.className = 'record-btn rec';
+      btn.textContent = '⏹️';
+      clearInterval(recordTimerId);
+      recordTimerId = setInterval(() => {
+        hint.textContent = `录音中 ${fmtDuration(Date.now() - recordStartTime)} · 点击停止`;
+      }, 1000);
+      hint.textContent = '录音中 0s · 点击停止';
+    } else {
+      btn.className = 'record-btn idle';
+      btn.textContent = '🎙️';
+      hint.textContent = '点击开始录音';
+    }
+  }
+
+  // ── Status pill ────────────────────────────────────────────
+  function setStatus(text, color) {
+    document.getElementById('statusPill').className = 'pill pill-' + color;
+    document.getElementById('statusText').textContent = text;
+  }
+
+  // ── Audio utils ────────────────────────────────────────────
+  function downsample(buf, fromRate, toRate) {
+    if (fromRate === toRate) return buf;
+    const ratio = fromRate / toRate;
+    const out = new Float32Array(Math.floor(buf.length / ratio));
+    for (let i = 0; i < out.length; i++) out[i] = buf[Math.floor(i * ratio)];
+    return out;
+  }
+
+  function float32ToInt16(f32) {
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]));
+      i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return i16;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+</script>
+</body>
+</html>

@@ -46,7 +46,7 @@ services:
 
       # ── 分析参数 ─────────────────────────────────────────
       - WINDOW_SEC=5
-      - MIN_TEXT_LEN=4
+      - MIN_TEXT_LEN=2
       - CONTEXT_MAX_CHARS=300
       - LLM_CONCURRENCY=1
 

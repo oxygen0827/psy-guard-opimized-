@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PsyGuard · 管理员监控</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --border: #e8eaed;
+      --text: #1c1e21;
+      --text-muted: #6b7280;
+      --blue: #2563eb;
+      --red: #dc2626;
+      --orange: #ea580c;
+      --orange-light: #fff7ed;
+      --yellow: #ca8a04;
+      --yellow-light: #fefce8;
+      --green: #16a34a;
+      --green-light: #dcfce7;
+      --radius: 12px;
+      --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.05);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo  { font-size: 22px; line-height: 1; }
+    .brand { font-size: 16px; font-weight: 700; }
+    .brand-sub { font-size: 12px; color: var(--text-muted); margin-left: 8px; font-weight: 400; }
+    header .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 12px; font-weight: 500;
+    }
+    .pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .pill-gray  { background: #f3f4f6; color: var(--text-muted); }
+    .pill-green { background: var(--green-light); color: var(--green); }
+    .pill-red   { background: #fee2e2; color: var(--red); }
+
+    /* ── Page ── */
+    .page { max-width: 1200px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 16px; }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+    .card-label {
+      font-size: 11px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: 14px;
+    }
+
+    /* ── Connection bar ── */
+    .conn-bar { display: flex; gap: 8px; align-items: center; }
+    .conn-bar input {
+      flex: 1; border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 12px; font-size: 13px; color: var(--text);
+      outline: none; transition: border-color .15s; background: #fafafa;
+    }
+    .conn-bar input:focus { border-color: var(--blue); background: #fff; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 8px 16px; border-radius: 8px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: all .15s; white-space: nowrap;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-blue { background: var(--blue); color: #fff; }
+    .btn-blue:not(:disabled):hover { background: #1d4ed8; }
+    .btn-red  { background: var(--red); color: #fff; }
+    .btn-red:not(:disabled):hover  { background: #b91c1c; }
+    .btn-ghost { background: #f3f4f6; color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:not(:disabled):hover { background: var(--border); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+    /* ── Stats bar ── */
+    .stats-bar { display: flex; gap: 12px; flex-wrap: wrap; }
+    .stat-chip {
+      background: var(--bg); border-radius: 8px; padding: 10px 16px;
+      display: flex; align-items: baseline; gap: 8px; min-width: 100px;
+    }
+    .stat-chip .num { font-size: 22px; font-weight: 700; line-height: 1; }
+    .stat-chip .lbl { font-size: 12px; color: var(--text-muted); }
+    .stat-chip.active .num { color: var(--blue); }
+    .stat-chip.alerts .num { color: var(--red); }
+    .stat-chip.sents  .num { color: var(--green); }
+
+    /* ── Session grid ── */
+    .session-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 16px;
+    }
+    @media (max-width: 500px) { .session-grid { grid-template-columns: 1fr; } }
+
+    /* ── Session card ── */
+    .session-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .session-card.ended { opacity: .65; }
+    .session-card.has-high { border-color: #fca5a5; box-shadow: 0 0 0 3px rgba(220,38,38,.12); }
+
+    .sc-header {
+      padding: 14px 16px 10px;
+      display: flex; align-items: flex-start; gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sc-indicator {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 4px;
+    }
+    .sc-indicator.live  { background: var(--green); box-shadow: 0 0 0 3px rgba(22,163,74,.15); animation: blink 2s ease-in-out infinite; }
+    .sc-indicator.ended { background: #9ca3af; }
+    @keyframes blink {
+      0%,100% { box-shadow: 0 0 0 3px rgba(22,163,74,.15); }
+      50%      { box-shadow: 0 0 0 5px rgba(22,163,74,.25); }
+    }
+    .sc-meta { flex: 1; min-width: 0; }
+    .sc-id   { font-size: 12px; font-family: monospace; color: var(--text-muted); }
+    .sc-ip   { font-size: 13px; font-weight: 600; margin-top: 1px; }
+    .sc-time { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .sc-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+    .badge {
+      font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .badge-high   { background: #fee2e2; color: var(--red); }
+    .badge-medium { background: var(--orange-light); color: var(--orange); }
+    .badge-low    { background: var(--yellow-light); color: var(--yellow); }
+    .badge-rec    { background: var(--green-light); color: var(--green); }
+
+    .sc-body { padding: 12px 16px; flex: 1; display: flex; flex-direction: column; gap: 10px; }
+
+    .sc-transcript {
+      min-height: 60px; max-height: 110px; overflow-y: auto;
+      font-size: 13px; line-height: 1.6;
+    }
+    .sc-transcript::-webkit-scrollbar { width: 3px; }
+    .sc-transcript::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .tr-final   { color: var(--text); }
+    .tr-interim { color: var(--orange); font-style: italic; }
+    .tr-empty   { color: var(--text-muted); font-style: italic; font-size: 12px; }
+
+    .sc-alerts { display: flex; flex-direction: column; gap: 4px; }
+    .alert-row {
+      font-size: 12px; padding: 4px 8px; border-radius: 5px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .alert-row.high   { background: #fef2f2; }
+    .alert-row.medium { background: var(--orange-light); }
+    .alert-row.low    { background: var(--yellow-light); }
+    .alert-row .kw  { font-weight: 600; }
+    .alert-row .txt { color: var(--text-muted); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .sc-footer {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .sc-footer .spacer { flex: 1; }
+    .dl-btn { display: inline-flex; align-items: center; gap: 4px; }
+
+    .empty-board {
+      text-align: center; padding: 60px 20px; color: var(--text-muted);
+    }
+    .empty-board .big { font-size: 40px; margin-bottom: 12px; }
+    .empty-board p { font-size: 14px; }
+
+    /* ── History panel ── */
+    .section-title {
+      font-size: 13px; font-weight: 600; color: var(--text-muted);
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 12px;
+    }
+    .section-title hr { flex: 1; border: none; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">🛡️</span>
+  <span class="brand">PsyGuard</span>
+  <span class="brand-sub">管理员监控</span>
+  <div class="right">
+    <span class="pill pill-gray" id="statusPill">
+      <span class="pill-dot"></span>
+      <span id="statusText">未连接</span>
+    </span>
+  </div>
+</header>
+
+<div class="page">
+  <!-- 连接 -->
+  <div class="card">
+    <div class="card-label">管理员连接</div>
+    <div class="conn-bar">
+      <input type="text" id="wsUrl" value="ws://150.158.146.192:8097/admin" placeholder="ws://host:port/admin">
+      <input type="text" id="httpUrl" value="http://150.158.146.192:8098" placeholder="http://host:8098" style="max-width:220px;">
+      <button class="btn btn-blue" id="connBtn" onclick="toggleConnect()">连接</button>
+    </div>
+  </div>
+
+  <!-- 统计 -->
+  <div class="card">
+    <div class="card-label">实时概览</div>
+    <div class="stats-bar">
+      <div class="stat-chip active">
+        <span class="num" id="numActive">0</span>
+        <span class="lbl">活跃输入端</span>
+      </div>
+      <div class="stat-chip">
+        <span class="num" id="numEnded" style="color:var(--text-muted)">0</span>
+        <span class="lbl">已结束</span>
+      </div>
+      <div class="stat-chip sents">
+        <span class="num" id="numSents">0</span>
+        <span class="lbl">总识别句</span>
+      </div>
+      <div class="stat-chip alerts">
+        <span class="num" id="numAlerts">0</span>
+        <span class="lbl">总预警数</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 活跃会话 -->
+  <div>
+    <div class="section-title">
+      <span>实时输入端</span><hr>
+    </div>
+    <div class="session-grid" id="liveGrid">
+      <div class="empty-board" id="emptyLive">
+        <div class="big">📡</div>
+        <p>暂无活跃输入端<br>等待客户端连接并开始录音…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 历史会话 -->
+  <div id="historySection" style="display:none;">
+    <div class="section-title">
+      <span>历史会话</span><hr>
+    </div>
+    <div class="session-grid" id="endedGrid"></div>
+  </div>
+</div>
+
+<script>
+  let ws = null;
+  const sessions = {};   // session_id → { meta, transcripts[], interimText, alerts[], ended }
+  let totalSents = 0;
+  let totalAlerts = 0;
+  let clockTimer = null;  // setInterval for live duration tickers
+
+  const httpBase = () => document.getElementById('httpUrl').value.replace(/\/$/, '');
+
+  // ── WebSocket ──────────────────────────────────────────────
+  function toggleConnect() {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+    else doConnect();
+  }
+
+  function doConnect() {
+    const url = document.getElementById('wsUrl').value.trim();
+    setStatus('gray', '连接中…');
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      setStatus('green', '已连接');
+      document.getElementById('connBtn').textContent = '断开';
+      document.getElementById('connBtn').className = 'btn btn-red';
+      // Start live clock for session duration display
+      clearInterval(clockTimer);
+      clockTimer = setInterval(tickDurations, 1000);
+    };
+    ws.onclose = () => {
+      setStatus('red', '已断开');
+      document.getElementById('connBtn').textContent = '连接';
+      document.getElementById('connBtn').className = 'btn btn-blue';
+      clearInterval(clockTimer);
+    };
+    ws.onerror = () => setStatus('red', '连接失败');
+    ws.onmessage = onMessage;
+  }
+
+  function tickDurations() {
+    Object.keys(sessions).forEach(sid => {
+      const s = sessions[sid];
+      if (s.ended) return;
+      const el = document.getElementById('dur-' + sid);
+      if (el) el.textContent = fmtDur(Date.now() / 1000 - s.startedAt);
+    });
+  }
+
+  function fmtDur(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return m ? `${m}:${String(s).padStart(2,'0')}` : `${s}s`;
+  }
+
+  // ── Message handling ───────────────────────────────────────
+  function onMessage(evt) {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+
+    switch (msg.type) {
+      case 'session_list':
+        msg.sessions.forEach(s => addSession(s, false));
+        break;
+      case 'session_start':
+        addSession(msg, false);
+        break;
+      case 'session_end':
+        endSession(msg.session_id);
+        break;
+      case 'transcript':
+        addTranscript(msg.session_id, msg.text);
+        break;
+      case 'interim':
+        setInterim(msg.session_id, msg.text);
+        break;
+      case 'alert':
+        addAlert(msg);
+        break;
+    }
+  }
+
+  // ── Session management ─────────────────────────────────────
+  function addSession(meta, ended) {
+    const sid = meta.session_id;
+    if (sessions[sid]) return;
+    sessions[sid] = {
+      meta,
+      transcripts: [],
+      interimText: '',
+      alerts: [],
+      ended: ended,
+      startedAt: meta.started_at || Date.now() / 1000,
+    };
+    renderCard(sid);
+    updateStats();
+  }
+
+  function endSession(sid) {
+    if (!sessions[sid]) return;
+    sessions[sid].ended = true;
+    sessions[sid].interimText = '';
+    renderCard(sid);
+    updateStats();
+    document.getElementById('historySection').style.display = '';
+  }
+
+  function addTranscript(sid, text) {
+    if (!sessions[sid]) return;
+    sessions[sid].transcripts.push(text);
+    sessions[sid].interimText = '';
+    totalSents++;
+    document.getElementById('numSents').textContent = totalSents;
+    updateCard(sid);
+  }
+
+  function setInterim(sid, text) {
+    if (!sessions[sid] || sessions[sid].ended) return;
+    sessions[sid].interimText = text;
+    // Update only the transcript box in-place — avoid full card re-render on every interim
+    const trBox = document.getElementById('tr-' + sid);
+    if (trBox) {
+      trBox.innerHTML = transcriptHtml(sessions[sid]);
+      trBox.scrollTop = trBox.scrollHeight;
+    } else {
+      renderCard(sid);
+    }
+  }
+
+  function addAlert(msg) {
+    const sid = msg.session_id;
+    if (!sessions[sid]) return;
+    sessions[sid].alerts.push(msg);
+    totalAlerts++;
+    document.getElementById('numAlerts').textContent = totalAlerts;
+    updateCard(sid);
+  }
+
+  // ── Card rendering ─────────────────────────────────────────
+  function renderCard(sid) {
+    const s = sessions[sid];
+    const grid = s.ended ? document.getElementById('endedGrid') : document.getElementById('liveGrid');
+    const emptyLive = document.getElementById('emptyLive');
+
+    let card = document.getElementById('card-' + sid);
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'card-' + sid;
+      card.className = 'session-card' + (s.ended ? ' ended' : '');
+      grid.appendChild(card);
+      if (emptyLive && !s.ended) emptyLive.style.display = 'none';
+    } else if (s.ended && card.parentNode !== document.getElementById('endedGrid')) {
+      // Move from live to ended grid (only if not already there)
+      card.className = 'session-card ended';
+      document.getElementById('endedGrid').insertBefore(card, document.getElementById('endedGrid').firstChild);
+      const remaining = document.querySelectorAll('#liveGrid .session-card');
+      if (!remaining.length) emptyLive.style.display = '';
+    }
+
+    const shortId   = sid.slice(0, 8);
+    const ipStr     = s.meta.client_ip || '—';
+    const startDt   = new Date(s.startedAt * 1000).toLocaleTimeString('zh-CN');
+    const highCount = s.alerts.filter(a => a.level === 'high').length;
+
+    // Apply high-alert highlight class
+    if (highCount > 0 && !s.ended) card.classList.add('has-high');
+    else card.classList.remove('has-high');
+
+    card.innerHTML = `
+      <div class="sc-header">
+        <div class="sc-indicator ${s.ended ? 'ended' : 'live'}"></div>
+        <div class="sc-meta">
+          <div class="sc-id">#${shortId}</div>
+          <div class="sc-ip">${esc(ipStr)}</div>
+          <div class="sc-time">${s.ended ? '已结束 · ' : ''}开始于 ${startDt}
+            ${!s.ended ? `<span id="dur-${sid}" style="margin-left:6px;color:var(--blue);font-weight:600;">${fmtDur(Date.now()/1000 - s.startedAt)}</span>` : ''}
+          </div>
+        </div>
+        <div class="sc-badges">
+          ${!s.ended ? '<span class="badge badge-rec">录制中</span>' : ''}
+          ${highCount > 0 ? `<span class="badge badge-high">高危 ×${highCount}</span>` : ''}
+        </div>
+      </div>
+      <div class="sc-body">
+        <div class="sc-transcript" id="tr-${sid}">
+          ${transcriptHtml(s)}
+        </div>
+        ${s.alerts.length ? `<div class="sc-alerts">${alertRowsHtml(s.alerts.slice(-3))}</div>` : ''}
+      </div>
+      <div class="sc-footer">
+        <span style="font-size:12px;color:var(--text-muted);">${s.transcripts.length} 句 · ${s.alerts.length} 预警</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm dl-btn" onclick="downloadRecording('${sid}')">⬇ 下载录音</button>
+      </div>
+    `;
+    // Auto-scroll transcript to latest content after full re-render
+    const trBox = card.querySelector('.sc-transcript');
+    if (trBox) trBox.scrollTop = trBox.scrollHeight;
+  }
+
+  function updateCard(sid) {
+    if (!sessions[sid]) return;
+    renderCard(sid);
+  }
+
+  function transcriptHtml(s) {
+    const lines = s.transcripts.slice(-5);
+    if (!lines.length && !s.interimText) return '<span class="tr-empty">等待语音…</span>';
+    return lines.map(l => `<div class="tr-final">${esc(l)}</div>`).join('') +
+      (s.interimText ? `<div class="tr-interim">${esc(s.interimText)}…</div>` : '');
+  }
+
+  function alertRowsHtml(alerts) {
+    return alerts.map(a => {
+      const lvl = ['high','medium','low'].includes(a.level) ? a.level : 'low';
+      return `
+      <div class="alert-row ${lvl}">
+        <span class="badge badge-${lvl}">${{high:'高危',medium:'警示',low:'关注'}[lvl]}</span>
+        <span class="kw">「${esc(a.keyword||'')}」</span>
+        <span class="txt">${esc(a.text||'')}</span>
+      </div>
+    `;
+    }).join('');
+  }
+
+  // ── Stats ──────────────────────────────────────────────────
+  function updateStats() {
+    const live  = Object.values(sessions).filter(s => !s.ended).length;
+    const ended = Object.values(sessions).filter(s => s.ended).length;
+    document.getElementById('numActive').textContent = live;
+    document.getElementById('numEnded').textContent  = ended;
+  }
+
+  // ── Download ───────────────────────────────────────────────
+  function downloadRecording(sid) {
+    const url = `${httpBase()}/recording/${sid}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${sid}.wav`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  // ── Helpers ────────────────────────────────────────────────
+  function setStatus(color, text) {
+    const pill = document.getElementById('statusPill');
+    const txt  = document.getElementById('statusText');
+    pill.className = 'pill pill-' + color;
+    txt.textContent = text;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+</script>
+</body>
+</html>
