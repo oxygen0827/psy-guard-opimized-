@@ -529,7 +529,7 @@ async def push_admin(session: aiohttp.ClientSession, alert: dict):
 # ─────────────────────────────────────────────────────────────
 #  处理一段文本（LLM 分析 + 推送）
 # ─────────────────────────────────────────────────────────────
-ALERT_COOLDOWN_SEC = int(os.getenv("ALERT_COOLDOWN_SEC", "30"))
+ALERT_COOLDOWN_SEC = int(os.getenv("ALERT_COOLDOWN_SEC", "10"))
 
 async def process_text(
     http_session: aiohttp.ClientSession,
