@@ -529,6 +529,8 @@ async def push_admin(session: aiohttp.ClientSession, alert: dict):
 # ─────────────────────────────────────────────────────────────
 #  处理一段文本（LLM 分析 + 推送）
 # ─────────────────────────────────────────────────────────────
+ALERT_COOLDOWN_SEC = int(os.getenv("ALERT_COOLDOWN_SEC", "30"))
+
 async def process_text(
     http_session: aiohttp.ClientSession,
     websocket,
@@ -537,6 +539,7 @@ async def process_text(
     llm_sem: asyncio.Semaphore,
     session_id: str,
     db,
+    alert_cooldown: list,   # [float] — cooldown_until timestamp, mutable so closure can update
     send_transcript: bool = True,
 ):
     if not text or len(text) < MIN_TEXT_LEN:
@@ -558,6 +561,11 @@ async def process_text(
         except Exception:
             pass
 
+    # Skip LLM during cooldown period after an alert
+    if time.time() < alert_cooldown[0]:
+        log.info(f"[LLM] skipped (cooldown): {text!r}")
+        return
+
     context = "".join(context_buf)
     if len(context) > CONTEXT_MAX_CHARS:
         context = context[-CONTEXT_MAX_CHARS:]
@@ -574,6 +582,7 @@ async def process_text(
         return
 
     context_buf.clear()
+    alert_cooldown[0] = time.time() + ALERT_COOLDOWN_SEC
 
     alert = {
         "type":       "alert",
@@ -617,22 +626,24 @@ async def process_window(
     llm_sem: asyncio.Semaphore,
     session_id: str,
     db,
+    alert_cooldown: list,
 ):
     text = await transcribe(pcm, http_session)
-    await process_text(http_session, websocket, text, context_buf, llm_sem, session_id, db)
+    await process_text(http_session, websocket, text, context_buf, llm_sem, session_id, db, alert_cooldown)
 
 # ─────────────────────────────────────────────────────────────
 #  流式连接处理（ASR_PROVIDER=xunfei）
 # ─────────────────────────────────────────────────────────────
 async def handle_stream(websocket, db):
     """讯飞持久流式模式：音频持续推送，边说边出字，低延迟。"""
-    client      = websocket.remote_address
-    session_id  = str(uuid.uuid4())
+    client          = websocket.remote_address
+    session_id      = str(uuid.uuid4())
     context_buf: deque[str] = deque()
-    llm_sem     = asyncio.Semaphore(LLM_CONCURRENCY)
-    recording   = False
-    xf_session  = None
-    pcm_file    = None
+    llm_sem         = asyncio.Semaphore(LLM_CONCURRENCY)
+    alert_cooldown  = [0.0]   # [cooldown_until]
+    recording       = False
+    xf_session      = None
+    pcm_file        = None
 
     _ssl_ctx = ssl.create_default_context()
     _ssl_ctx.check_hostname = False
@@ -652,7 +663,7 @@ async def handle_stream(websocket, db):
             # 在 http_session 关闭前完成 LLM 分析，防止最后几句话漏报预警。
             await process_text(http_session, websocket, sentence,
                                context_buf, llm_sem, session_id, db,
-                               send_transcript=False)
+                               alert_cooldown, send_transcript=False)
 
         async def on_interim(text: str):
             try:
@@ -682,6 +693,7 @@ async def handle_stream(websocket, db):
                         recording  = True
                         session_id = str(uuid.uuid4())
                         context_buf.clear()
+                        alert_cooldown[0] = 0.0
                         # Open PCM file for saving audio
                         pcm_path = None
                         if AUDIO_SAVE_DIR:
@@ -755,12 +767,13 @@ async def handle_stream(websocket, db):
 # ─────────────────────────────────────────────────────────────
 async def handle_batch(websocket, db):
     """每 WINDOW_SEC 秒处理一批音频。"""
-    client     = websocket.remote_address
-    audio_buf  = bytearray()
-    recording  = False
-    session_id = str(uuid.uuid4())
+    client          = websocket.remote_address
+    audio_buf       = bytearray()
+    recording       = False
+    session_id      = str(uuid.uuid4())
     context_buf: deque[str] = deque()
-    llm_sem    = asyncio.Semaphore(LLM_CONCURRENCY)
+    llm_sem         = asyncio.Semaphore(LLM_CONCURRENCY)
+    alert_cooldown  = [0.0]
 
     _ssl_ctx2 = ssl.create_default_context()
     _ssl_ctx2.check_hostname = False
@@ -776,6 +789,7 @@ async def handle_batch(websocket, db):
                         session_id = str(uuid.uuid4())
                         audio_buf.clear()
                         context_buf.clear()
+                        alert_cooldown[0] = 0.0
                         await websocket.send("ACK:START")
                         log.info(f"[WS] {client} START session={session_id[:8]}")
                     elif cmd == "STOP":
@@ -786,7 +800,7 @@ async def handle_batch(websocket, db):
                             asyncio.create_task(
                                 process_window(http_session, websocket,
                                                bytes(audio_buf), context_buf,
-                                               llm_sem, session_id, db)
+                                               llm_sem, session_id, db, alert_cooldown)
                             )
                         audio_buf.clear()
                     continue
@@ -800,7 +814,7 @@ async def handle_batch(websocket, db):
                     audio_buf = bytearray(audio_buf[WINDOW_BYTES:])
                     asyncio.create_task(
                         process_window(http_session, websocket, chunk,
-                                       context_buf, llm_sem, session_id, db)
+                                       context_buf, llm_sem, session_id, db, alert_cooldown)
                     )
 
         except websockets.exceptions.ConnectionClosed:
