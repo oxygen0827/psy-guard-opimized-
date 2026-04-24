@@ -251,6 +251,7 @@ class XunfeiStreamSession:
     """
     CHUNK_SIZE      = 1280   # 40ms @ 16kHz 16bit mono
     SESSION_MAX_SEC = 55     # 接近讯飞 60s 限制前重连
+    MAX_BUF_BYTES   = 1280 * 4  # 160ms 上限；重连期间积压音频超过此值则丢弃最旧的部分
 
     def __init__(self, on_text, on_interim=None):
         self._on_text        = on_text
@@ -313,6 +314,12 @@ class XunfeiStreamSession:
                     url, max_size=10*1024*1024, open_timeout=10, ssl=self._make_ssl()
                 )
                 log.info("[ASR/stream] iFlytek session opened")
+                # 重连期间积压的旧音频会导致 latency 随时间线性增长；
+                # 每次新 session 只保留最近 MAX_BUF_BYTES，丢弃早于此的积压。
+                if len(self._buf) > self.MAX_BUF_BYTES:
+                    skipped = len(self._buf) - self.MAX_BUF_BYTES
+                    del self._buf[:skipped]
+                    log.info(f"[ASR/stream] dropped {skipped//32}ms stale audio to maintain real-time latency")
                 first    = True
                 t_start  = time.time()
                 recv_task = asyncio.create_task(self._recv_loop(ws))
