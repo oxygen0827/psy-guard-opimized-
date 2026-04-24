@@ -256,7 +256,7 @@ iPhone             psy-guard          讯飞 IAT          LLM
 | 文件 | 用途 |
 |---|---|
 | `client.html` | 网页版客户端：发送音频/文本，查看实时字幕和预警 |
-| `admin.html` | 管理后台：监控所有会话，下载录音（需 8098 端口） |
+| `admin.html` | 管理后台：实时监控所有会话，下载录音 |
 
 **使用说明**：
 - `ws://` 是 WebSocket 协议，无法在浏览器地址栏直接打开
@@ -264,8 +264,8 @@ iPhone             psy-guard          讯飞 IAT          LLM
 - 分享给他人：直接发送 HTML 文件，对方本地打开，不需要服务器托管
 
 **端口状态**：
-- `:8097` — WebSocket 主端口，公网可访问（client.html / admin.html 的 WS 功能均可用）
-- `:8098` — HTTP 录音下载端口，默认被云服务器安全组拦截；如需 admin.html 的录音下载功能，需在控制台开放此端口
+- `:8097` — 公网可访问，同时承担 WebSocket 和录音下载（`GET /recording/{id}`）两个功能，无需额外端口
+- `:8098` — 备用 HTTP 端口，防火墙默认拦截，可忽略
 
 ---
 
@@ -296,6 +296,9 @@ python3 test_file.py 录音.m4a ws://150.158.146.192:8097
 | 服务器 | 句子完成后主动重连（消除死区） | **已部署** |
 | 服务器 | flush_pending 防丢句子 | **已部署** |
 | 服务器 | vad_eos=500ms | **已部署** |
+| 服务器 | 管理员实时监控（broadcast_admin） | **已部署（修复 UnboundLocalError）** |
+| 服务器 | 录音下载（8097 端口，无需开放 8098） | **已部署** |
+| 服务器 | ASR 延时累积修复（MAX_BUF_BYTES=160ms） | **已部署** |
 | 服务器 | FunASR 本地模式 | 完成 |
 | 服务器 | Whisper API 云端模式 | 完成 |
 | 服务器 | SQLite 持久化 | 完成 |

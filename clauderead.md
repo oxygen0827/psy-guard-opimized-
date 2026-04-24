@@ -1,4 +1,4 @@
-# PsyGuard 项目当前状态（2026-04-23，最后更新）
+# PsyGuard 项目当前状态（2026-04-24，最后更新）
 
 > 给下一个 Claude 实例快速上手用。本文件优先于 CLAUDE.md 中的旧信息。
 
@@ -76,6 +76,7 @@
   8. **`vad_eos` 从 1000ms 降到 500ms**（句子边界检测更快）
   9. **主动重连**：每句 `ls=True` 后立即重连讯飞（`_needs_reconnect` 标志），消除原来 ~10s 死区
   10. 错误重连延迟从 1s 降到 0.3s
+  11. **延时累积修复**：新 session 建立时若 `_buf` 超 160ms 则丢弃最旧积压，防止重连开销导致延时线性增长（根因：每次重连 ~1s，期间 ~32KB 音频堆积，30 句后延时达 15-20s）
 
 - **端到端验证（已确认）**：
   - iOS → 服务器 WebSocket 连接正常 ✅
@@ -117,7 +118,7 @@ ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
 
 | 文件 | 改动 |
 |---|---|
-| `server/server.py` | pgs/sn/ls修复、孤立句修复、静音帧、MIN_TEXT_LEN=2、START防泄漏、interim推送、sentence_buf实例化、_flush_pending、vad_eos=500、_needs_reconnect主动重连、错误重连0.3s |
+| `server/server.py` | pgs/sn/ls修复、孤立句修复、静音帧、MIN_TEXT_LEN=2、START防泄漏、interim推送、sentence_buf实例化、_flush_pending、vad_eos=500、_needs_reconnect主动重连、错误重连0.3s；**broadcast_admin UnboundLocalError修复**（`-=` → `.difference_update()`）；**_process_request：GET /recording/{sid} 在8097端口直接下载**；**MAX_BUF_BYTES=160ms 防延时累积** |
 | `server/docker-compose.yml` | MIN_TEXT_LEN=4 → 2 |
 | `server/Dockerfile` | pip 改用清华镜像 |
 | `PsyGuard-iOS/ServerRelay.swift` | bufferThreshold 4096→1600，flushAndStop()，stopped标志防重连，relayDidReceiveInterim，parseAlert处理interim类型 |
@@ -192,11 +193,11 @@ BLE 设备广播名：`PsyGuard`（iOS 过滤条件：name 含 XIAO/Sense/Psy/Ar
 | 文件 | 用途 | 连接地址 |
 |---|---|---|
 | `client.html` | 网页版客户端，测试 ASR + 预警 | `ws://150.158.146.192:8097` |
-| `admin.html` | 管理后台，查看会话/录音下载 | `ws://150.158.146.192:8097/admin` + `http://150.158.146.192:8098` |
+| `admin.html` | 管理后台，查看会话/录音下载 | WS: `ws://150.158.146.192:8097/admin`，下载: `http://150.158.146.192:8097` |
 
 **重要**：
 - `ws://` 不能在浏览器地址栏直接打开，必须**本地双击打开 HTML 文件**，页面内的输入框填好地址后点连接
-- 端口 **8097 公网已通**；端口 **8098 被防火墙拦截**（需在云服务器安全组开放才能用 admin 页面的录音下载功能）
+- 端口 **8097 已同时处理 WebSocket 和录音下载**（`GET /recording/{sid}` 通过 `process_request` 钩子在同一端口服务），无需开放 8098
 - 要分享给别人使用：直接发 HTML 文件，对方本地打开即可，**不要发 ws:// URL**
 
 ---
