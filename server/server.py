@@ -641,11 +641,11 @@ async def handle_stream(websocket, db):
             asyncio.create_task(broadcast_admin({
                 "type": "transcript", "session_id": session_id, "text": sentence
             }))
-            asyncio.create_task(
-                process_text(http_session, websocket, sentence,
-                             context_buf, llm_sem, session_id, db,
-                             send_transcript=False)
-            )
+            # 直接 await 而非 create_task，确保 stop()/断线时 _flush_pending 触发的最终句子
+            # 在 http_session 关闭前完成 LLM 分析，防止最后几句话漏报预警。
+            await process_text(http_session, websocket, sentence,
+                               context_buf, llm_sem, session_id, db,
+                               send_transcript=False)
 
         async def on_interim(text: str):
             try:

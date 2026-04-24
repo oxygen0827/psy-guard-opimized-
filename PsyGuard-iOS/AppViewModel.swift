@@ -149,7 +149,8 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
             case .idle:
                 self?.bleStatus = "未连接"
                 self?.bleConnected = false
-                if self?.isRecording == true {
+                // 仅在 BLE 模式下录音时才因 BLE 掉线停录；手机麦克风模式不依赖 BLE
+                if self?.isRecording == true && self?.usePhoneMic == false {
                     self?.isRecording = false
                     self?.relay.flushAndStop()
                     self?.endSession()

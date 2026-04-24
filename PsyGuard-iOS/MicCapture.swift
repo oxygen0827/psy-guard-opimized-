@@ -48,7 +48,11 @@ final class MicCapture {
 
         let inputNode = engine.inputNode
         let hwFormat  = inputNode.inputFormat(forBus: 0)
-        converter     = AVAudioConverter(from: hwFormat, to: targetFormat)
+        guard let conv = AVAudioConverter(from: hwFormat, to: targetFormat) else {
+            throw NSError(domain: "MicCapture", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "无法创建音频格式转换器（hw: \(hwFormat.sampleRate)Hz → 16kHz）"])
+        }
+        converter = conv
 
         // 每 50ms 回调一次，与 XIAO 发包节奏接近
         let bufSize = AVAudioFrameCount(hwFormat.sampleRate * 0.05)

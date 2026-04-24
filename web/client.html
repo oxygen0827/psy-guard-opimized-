@@ -441,7 +441,12 @@
     if (fromRate === toRate) return buf;
     const ratio = fromRate / toRate;
     const out = new Float32Array(Math.floor(buf.length / ratio));
-    for (let i = 0; i < out.length; i++) out[i] = buf[Math.floor(i * ratio)];
+    for (let i = 0; i < out.length; i++) {
+      const pos = i * ratio;
+      const idx = Math.floor(pos);
+      const frac = pos - idx;
+      out[i] = (buf[idx] || 0) + frac * ((buf[idx + 1] || 0) - (buf[idx] || 0));
+    }
     return out;
   }
 
