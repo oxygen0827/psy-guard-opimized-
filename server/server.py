@@ -668,6 +668,12 @@ async def handle_stream(websocket, db):
                         if pcm_file:
                             pcm_file.close()
                             pcm_file = None
+                        # End previous session on admin before starting new one
+                        if session_id in active_sessions:
+                            asyncio.create_task(broadcast_admin({
+                                "type": "session_end", "session_id": session_id
+                            }))
+                            del active_sessions[session_id]
                         recording  = True
                         session_id = str(uuid.uuid4())
                         context_buf.clear()
