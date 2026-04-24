@@ -890,23 +890,24 @@ async def start_http_server():
 # ─────────────────────────────────────────────────────────────
 #  HTTP GET /recording/{sid} on the same WS port（不依赖 8098）
 # ─────────────────────────────────────────────────────────────
-async def _process_request(connection, request):
-    """Intercept plain HTTP GET /recording/{sid} on port 8097."""
-    if not request.path.startswith("/recording/"):
+async def _process_request(path, request_headers):
+    """Intercept plain HTTP GET /recording/{sid} on port 8097.
+    websockets 12.x legacy API: signature is (path: str, headers: Headers).
+    Return None to proceed with WS upgrade, or (HTTPStatus, headers, body) for HTTP response.
+    """
+    from http import HTTPStatus
+
+    if not path.startswith("/recording/"):
         return None  # proceed with WebSocket upgrade
 
-    from http import HTTPStatus
-    from websockets.http11 import Response as WsResponse
-    from websockets.datastructures import Headers as WsHeaders
-
-    sid = request.path[len("/recording/"):].strip("/")
+    sid = path[len("/recording/"):].strip("/")
     if not sid or not all(c.isalnum() or c == "-" for c in sid):
-        return connection.respond(HTTPStatus.BAD_REQUEST, "Invalid session ID\n")
+        return (HTTPStatus.BAD_REQUEST, {}, b"Invalid session ID\n")
     if not AUDIO_SAVE_DIR:
-        return connection.respond(HTTPStatus.SERVICE_UNAVAILABLE, "Audio saving disabled\n")
+        return (HTTPStatus.SERVICE_UNAVAILABLE, {}, b"Audio saving disabled\n")
     fpath = os.path.join(AUDIO_SAVE_DIR, f"{sid}.pcm")
     if not os.path.exists(fpath):
-        return connection.respond(HTTPStatus.NOT_FOUND, "Recording not found\n")
+        return (HTTPStatus.NOT_FOUND, {}, b"Recording not found\n")
 
     with open(fpath, "rb") as f:
         pcm_data = f.read()
@@ -917,12 +918,12 @@ async def _process_request(connection, request):
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(pcm_data)
     body = buf.getvalue()
-    return WsResponse(200, "OK", WsHeaders([
+    return (HTTPStatus.OK, [
         ("Content-Type", "audio/wav"),
         ("Content-Disposition", f'attachment; filename="{sid}.wav"'),
         ("Content-Length", str(len(body))),
         ("Access-Control-Allow-Origin", "*"),
-    ]), body)
+    ], body)
 
 
 # ─────────────────────────────────────────────────────────────
