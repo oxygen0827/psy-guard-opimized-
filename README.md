@@ -299,12 +299,18 @@ python3 test_file.py 录音.m4a ws://150.158.146.192:8097
 | 服务器 | 管理员实时监控（broadcast_admin） | **已部署（修复 UnboundLocalError）** |
 | 服务器 | 录音下载（8097 端口，无需开放 8098） | **已部署** |
 | 服务器 | ASR 延时累积修复（MAX_BUF_BYTES=160ms） | **已部署** |
+| 服务器 | on_text await process_text 防止最后几句漏报预警 | **已部署** |
+| 服务器 | _process_request legacy API 兼容修复（原版致所有连接 500） | **已部署** |
+| 网页 | client.html downsample 线性插值（改善 ASR 识别率） | **已更新** |
+| iOS | MicCapture AVAudioConverter nil 检查 | 代码完成，**需重新安装** |
+| iOS | BLE 掉线不打断手机麦克风录音 | 代码完成，**需重新安装** |
 | 服务器 | FunASR 本地模式 | 完成 |
 | 服务器 | Whisper API 云端模式 | 完成 |
 | 服务器 | SQLite 持久化 | 完成 |
 | 服务器 | 管理员 Webhook 推送 | 完成 |
 | 端到端 | iOS→服务器连接验证 | ✅ 已验证 |
 | 端到端 | 语音识别+LLM预警验证 | ✅ 已验证（手机麦克风） |
+| 端到端 | 管理员监控+录音下载验证 | ✅ 已验证（web admin） |
 | 端到端 | XIAO固件+完整链路 | 待重烧固件后验证 |
 | iOS | BLE 后台保持连接 | 待验证 |
 

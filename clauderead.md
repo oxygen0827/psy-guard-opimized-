@@ -1,4 +1,4 @@
-# PsyGuard 项目当前状态（2026-04-24，最后更新）
+# PsyGuard 项目当前状态（2026-04-24，第二次更新）
 
 > 给下一个 Claude 实例快速上手用。本文件优先于 CLAUDE.md 中的旧信息。
 
@@ -78,6 +78,13 @@
   10. 错误重连延迟从 1s 降到 0.3s
   11. **延时累积修复**：新 session 建立时若 `_buf` 超 160ms 则丢弃最旧积压，防止重连开销导致延时线性增长（根因：每次重连 ~1s，期间 ~32KB 音频堆积，30 句后延时达 15-20s）
 
+- **代码审查 Bug 修复（2026-04-24 第二次，已部署）**：
+  12. **`on_text` 改为 `await process_text()`**：原用 `create_task` 异步启动，stop/断线时 `http_session` 提前关闭导致最后几句 LLM 分析静默失败、漏报预警；改为直接 await 后 `_flush_pending` 可确保分析完成再关闭
+  13. **`_process_request` legacy API 兼容修复**（**严重**）：原签名 `(connection, request)` 与 websockets 12.x legacy API 实际签名 `(path, headers)` 不匹配，导致所有 WebSocket 连接（普通客户端和管理员）均返回 500 失败；修复为 `(path, request_headers)`，返回格式改为 `(HTTPStatus, headers_list, body)` 三元组
+  14. `client.html` downsample 改线性插值（原最近邻），减少降采样混叠，提升 ASR 识别率
+  15. `MicCapture.swift` startEngine 增加 `AVAudioConverter` nil 检查，失败时抛可见错误而非静默丢音频（**需重装 App**）
+  16. `AppViewModel.swift` `bleStateChanged(.idle)` 增加 `usePhoneMic` 判断，BLE 掉线不再打断手机麦克风录音（**需重装 App**）
+
 - **端到端验证（已确认）**：
   - iOS → 服务器 WebSocket 连接正常 ✅
   - 讯飞识别出真实语音内容 ✅（日志可见转写文字）
@@ -87,7 +94,7 @@
 ### 待完成 ⬜
 
 - [ ] **重新烧录 Arduino 固件**（`PDM.setGain(30)`）—— 这是 XIAO 麦克风音量太低的根因
-- [ ] **重新安装 iOS App**（含手机麦克风调试模式 + 实时中间字幕）
+- [ ] **重新安装 iOS App**（含手机麦克风调试模式 + 实时中间字幕 + BLE掉线不停麦克风修复）
 - [ ] 长时间录制稳定性测试（BLE 掉包/重连）
 
 ---
@@ -118,13 +125,14 @@ ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
 
 | 文件 | 改动 |
 |---|---|
-| `server/server.py` | pgs/sn/ls修复、孤立句修复、静音帧、MIN_TEXT_LEN=2、START防泄漏、interim推送、sentence_buf实例化、_flush_pending、vad_eos=500、_needs_reconnect主动重连、错误重连0.3s；**broadcast_admin UnboundLocalError修复**（`-=` → `.difference_update()`）；**_process_request：GET /recording/{sid} 在8097端口直接下载**；**MAX_BUF_BYTES=160ms 防延时累积** |
+| `server/server.py` | pgs/sn/ls修复、孤立句修复、静音帧、MIN_TEXT_LEN=2、START防泄漏、interim推送、sentence_buf实例化、_flush_pending、vad_eos=500、_needs_reconnect主动重连、错误重连0.3s；broadcast_admin UnboundLocalError修复；**_process_request legacy API兼容修复**（签名改为`(path,headers)`，返回`(HTTPStatus,headers,body)`三元组，原版导致所有连接500）；MAX_BUF_BYTES=160ms防延时累积；**on_text改为await process_text防止最后几句漏报** |
 | `server/docker-compose.yml` | MIN_TEXT_LEN=4 → 2 |
 | `server/Dockerfile` | pip 改用清华镜像 |
 | `PsyGuard-iOS/ServerRelay.swift` | bufferThreshold 4096→1600，flushAndStop()，stopped标志防重连，relayDidReceiveInterim，parseAlert处理interim类型 |
-| `PsyGuard-iOS/AppViewModel.swift` | toggleRecording顺序修正，BLE断线重置，通知音default，usePhoneMic开关，MicCapture集成，currentSentence，relayDidReceiveInterim |
+| `PsyGuard-iOS/AppViewModel.swift` | toggleRecording顺序修正，BLE断线重置，通知音default，usePhoneMic开关，MicCapture集成，currentSentence，relayDidReceiveInterim；**bleStateChanged(.idle)增加usePhoneMic判断防止误停麦克风录音** |
 | `PsyGuard-iOS/ContentView.swift` | 录音按钮双重检查，手机麦克风调试Toggle，transcriptBox分层显示（黑=已确认/橙=识别中） |
-| `PsyGuard-iOS/MicCapture.swift` | 新增：AVAudioEngine采集16kHz 16bit PCM mono，AVAudioConverter重采样 |
+| `PsyGuard-iOS/MicCapture.swift` | AVAudioEngine采集16kHz 16bit PCM mono，AVAudioConverter重采样；**startEngine增加converter nil检查，失败时抛错而非静默丢音** |
+| `web/client.html` | **downsample改线性插值**（原最近邻，降采样混叠影响识别率） |
 | `PsyGuard-iOS/Info.plist` | 新增 NSMicrophoneUsageDescription |
 | `PsyGuard-iOS/PsyGuard.xcodeproj/project.pbxproj` | 新增 MicCapture.swift 编译引用 |
 | `PsyGuard-Arduino/PsyGuard.ino` | PDM.setGain(30)，PDM buffer overflow 保护 |
