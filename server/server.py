@@ -568,6 +568,8 @@ async def process_text(
     if not alert_data:
         return
 
+    context_buf.clear()
+
     alert = {
         "type":       "alert",
         "id":         str(uuid.uuid4()),
