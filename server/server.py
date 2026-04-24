@@ -559,13 +559,12 @@ async def process_text(
     async with llm_sem:
         alert_data = await analyze(http_session, context, text)
 
-    context_buf.append(text)
-    total = sum(len(s) for s in context_buf)
-    while total > CONTEXT_MAX_CHARS and context_buf:
-        removed = context_buf.popleft()
-        total -= len(removed)
-
     if not alert_data:
+        context_buf.append(text)
+        total = sum(len(s) for s in context_buf)
+        while total > CONTEXT_MAX_CHARS and context_buf:
+            removed = context_buf.popleft()
+            total -= len(removed)
         return
 
     context_buf.clear()
