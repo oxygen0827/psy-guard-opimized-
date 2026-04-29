@@ -1,4 +1,4 @@
-# PsyGuard 项目当前状态（2026-04-24，第二次更新）
+# PsyGuard 项目当前状态（2026-04-29，第四次更新）
 
 > 给下一个 Claude 实例快速上手用。本文件优先于 CLAUDE.md 中的旧信息。
 
@@ -14,10 +14,10 @@
 
 ```
 [XIAO nRF52840 Sense]
-  PDM麦克风 16kHz PCM → BLE Nordic UART Service (244字节/包)
+  PDM麦克风 16kHz 采集 → 软件降采样到 8kHz → BLE Nordic UART Service (244字节/包)
          ↓ BLE
 [iPhone App (Swift)]
-  CoreBluetooth 接收 → 1600字节缓冲(~50ms) → WebSocket 推服务器
+  CoreBluetooth 接收 → 1600字节缓冲(~100ms) → WebSocket 推服务器
   接收预警 JSON → SwiftUI 展示 + 系统通知
   （调试模式）手机麦克风直接采集，绕过 XIAO 固件
          ↓ WebSocket
@@ -48,54 +48,74 @@
 
 ### 已完成 ✅
 
-- **Arduino 固件**（代码已改，尚未重烧）：
-  - PDM 采集 + BLE 流式传输，BLE 连接 iOS 正常
-  - `PDM.setGain(30)` 已写入代码 **→ 需重烧才生效（这是实际设备识别差的根因）**
+- **XIAO 硬件音频输入已完全解决**：
+  - PDM 硬件本身正常（PDMTest 无 BLE 时 RMS=137，干净）
+  - BLE 射频干扰问题已通过降低增益+软件降采样解决
+  - 当前固件：gain=35，PDM 16kHz 采集 → 3点均值滤波 → 取偶数样本降到 8kHz → BLE 传输
+  - BLE 请求 15ms 连接间隔（`BLE.setConnectionInterval(12, 12)`）
+  - 音频质量已通过 `ble_record.py` 验证 OK
 
-- **iOS App**（代码已改，尚未重装）：
-  - BLE 管理、WebSocket 中继、SwiftUI 预警界面，Xcode 工程完整
-  - `MicCapture.swift`：手机麦克风调试模式（绕过 XIAO 固件）
-  - 实时中间字幕（橙色）：讯飞每次识别中间结果即时显示，不等 `ls=True`
-  - 缓冲 1600 字节（~50ms），`flushAndStop()` 停录保证完整
-  - BLE 断线自动重置录音状态
-  - UI：录音按钮上方有"手机麦克风（调试）"开关，打开后无需 XIAO 即可测试
+- **iOS App（手机麦克风模式）**：
+  - 手机麦克风 → 服务器 → 讯飞识别 → LLM 预警 **完整链路已验证**
+  - 代码含所有修复（sendControl 写类型检测、BLE 诊断回调、BLE 断线不停麦克风录音）
+  - **尚未重装**（旧版 App 在手机上，新代码已在 Xcode 工程里）
 
-- **云端 Docker 部署（已热更新，无需重启）**：
-  - 镜像运行中，监听 `0.0.0.0:8097`
+- **云端 Docker 部署（已热更新，最新 server.py 已注入）**：
+  - 监听 `0.0.0.0:8097`
   - ASR：讯飞持久流式 IAT（`XunfeiStreamSession`）
   - LLM：阿里百炼 qwen-flash，`MIN_TEXT_LEN=2`
+  - **已更新为 8kHz**（`SAMPLE_RATE=8000`，讯飞 format 字符串 `rate=8000`，已重启容器）
 
-- **ASR 修复（全部已部署）**：
-  1. pgs/sn/ls 修复：仅在 `ls=True` 输出完整句子
-  2. 孤立句子修复：`ls=True` 时先 flush 所有更早的 sn
-  3. 静音帧改为全零 PCM
-  4. `on_text` 每句直接触发 LLM
-  5. START 命令防旧 session 泄漏
-  6. **实时中间字幕**：`ls=False` 时推 `{"type":"interim","text":"..."}` 给 iOS
-  7. **`sentence_buf` 改为实例变量**，`stop()` 和重连前均 `_flush_pending()`，防丢句子
-  8. **`vad_eos` 从 1000ms 降到 500ms**（句子边界检测更快）
-  9. **主动重连**：每句 `ls=True` 后立即重连讯飞（`_needs_reconnect` 标志），消除原来 ~10s 死区
-  10. 错误重连延迟从 1s 降到 0.3s
-  11. **延时累积修复**：新 session 建立时若 `_buf` 超 160ms 则丢弃最旧积压，防止重连开销导致延时线性增长（根因：每次重连 ~1s，期间 ~32KB 音频堆积，30 句后延时达 15-20s）
-
-- **代码审查 Bug 修复（2026-04-24 第二次，已部署）**：
-  12. **`on_text` 改为 `await process_text()`**：原用 `create_task` 异步启动，stop/断线时 `http_session` 提前关闭导致最后几句 LLM 分析静默失败、漏报预警；改为直接 await 后 `_flush_pending` 可确保分析完成再关闭
-  13. **`_process_request` legacy API 兼容修复**（**严重**）：原签名 `(connection, request)` 与 websockets 12.x legacy API 实际签名 `(path, headers)` 不匹配，导致所有 WebSocket 连接（普通客户端和管理员）均返回 500 失败；修复为 `(path, request_headers)`，返回格式改为 `(HTTPStatus, headers_list, body)` 三元组
-  14. `client.html` downsample 改线性插值（原最近邻），减少降采样混叠，提升 ASR 识别率
-  15. `MicCapture.swift` startEngine 增加 `AVAudioConverter` nil 检查，失败时抛可见错误而非静默丢音频（**需重装 App**）
-  16. `AppViewModel.swift` `bleStateChanged(.idle)` 增加 `usePhoneMic` 判断，BLE 掉线不再打断手机麦克风录音（**需重装 App**）
-
-- **端到端验证（已确认）**：
-  - iOS → 服务器 WebSocket 连接正常 ✅
-  - 讯飞识别出真实语音内容 ✅（日志可见转写文字）
-  - LLM 分析正常，预警触发 ✅（"崩溃" → medium 预警）
-  - 原 ~11s 识别死区已修复，句间间隔降至 ~1s ✅
+- **所有 server.py Bug 修复（全部已部署）**：
+  1. pgs/sn/ls 修复 + 孤立句子修复
+  2. 静音帧改为全零 PCM
+  3. START 命令防旧 session 泄漏
+  4. 实时中间字幕（`ls=False` 时推 `interim`）
+  5. `sentence_buf` 实例变量 + `_flush_pending`
+  6. `vad_eos=500ms`（更快的句子边界）
+  7. 主动重连（`_needs_reconnect`，消除 ~10s 死区）
+  8. 错误重连 0.3s
+  9. `MAX_BUF_BYTES=160ms`（防延时累积）
+  10. `on_text` 改为 `await process_text()`（防断线漏报）
+  11. `broadcast_admin` UnboundLocalError（Python 3.11 问题，显式 `global` 声明修复）
+  12. `_process_request` legacy API 兼容（签名改为 `(path, headers)`，返回三元组）
+  13. `_recv_loop` on_text 任务追踪（`_text_tasks` set + `stop()` 等待完成，防断线漏最后几句）
 
 ### 待完成 ⬜
 
-- [ ] **重新烧录 Arduino 固件**（`PDM.setGain(30)`）—— 这是 XIAO 麦克风音量太低的根因
-- [ ] **重新安装 iOS App**（含手机麦克风调试模式 + 实时中间字幕 + BLE掉线不停麦克风修复）
-- [ ] 长时间录制稳定性测试（BLE 掉包/重连）
+- [x] ~~**更新服务器 SAMPLE_RATE 为 8000**~~ ✅ 已完成（server.py + 本地副本同步）
+- [ ] **同步更新 MicCapture.swift 为 8kHz**（保持手机麦克风模式与 XIAO 格式一致）
+- [ ] **重新安装 iOS App**（含 sendControl 自动检测 + BLE 诊断回调 + 掉线不停麦克风）
+- [ ] 端到端 XIAO 完整联调（服务器更新 + iOS App 重装后）
+- [ ] 长时间录制稳定性测试
+
+---
+
+## 固件关键参数（当前烧录版本）
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| PDM 采样率 | 16000 Hz | 硬件固定，软件降采样到 8kHz |
+| PDM 增益 | 35 | gain=20 信号太弱(RMS~100)，35 约 RMS~180-950 |
+| 降采样方式 | 3点均值滤波 + 取偶数样本 | 消除混叠，保证音色正常 |
+| BLE 输出率 | 8000 Hz equivalent | 传给 iOS/Mac 的有效采样率 |
+| BLE 连接间隔 | 请求 15ms（12×1.25ms） | 提升吞吐，减少数据丢失 |
+| sampleBuffer | 1024 样本 | 64ms/包，降低 BLE 射频干扰频率 |
+
+---
+
+## BLE 直连录音测试工具（Mac 端验证）
+
+- `ble_record.py`：Mac 通过 bleak 直连 XIAO，接收 BLE 音频，保存 WAV 到桌面
+- **安装 bleak**（必须用 python3.11，Xcode 自带 python3.9 不兼容）：
+  ```bash
+  /Users/hushaohong/.local/bin/python3.11 -m pip install bleak --break-system-packages
+  ```
+- **启动**（按 Ctrl+C 一次停止，自动保存）：
+  ```bash
+  /Users/hushaohong/.local/bin/python3.11 /Users/hushaohong/vibe-coding/psy-guard/ble_record.py
+  ```
+- **录音位置**：`~/Desktop/xiao_recordings/`
 
 ---
 
@@ -125,17 +145,21 @@ ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
 
 | 文件 | 改动 |
 |---|---|
-| `server/server.py` | pgs/sn/ls修复、孤立句修复、静音帧、MIN_TEXT_LEN=2、START防泄漏、interim推送、sentence_buf实例化、_flush_pending、vad_eos=500、_needs_reconnect主动重连、错误重连0.3s；broadcast_admin UnboundLocalError修复；**_process_request legacy API兼容修复**（签名改为`(path,headers)`，返回`(HTTPStatus,headers,body)`三元组，原版导致所有连接500）；MAX_BUF_BYTES=160ms防延时累积；**on_text改为await process_text防止最后几句漏报** |
+| `server/server.py` | pgs/sn/ls修复、孤立句修复、静音帧、MIN_TEXT_LEN=2、START防泄漏、interim推送、sentence_buf实例化、_flush_pending、vad_eos=500、_needs_reconnect主动重连、错误重连0.3s；broadcast_admin global声明修复；_process_request legacy API兼容；MAX_BUF_BYTES=160ms；on_text改await防漏报；_text_tasks任务追踪防断线漏最后几句 |
 | `server/docker-compose.yml` | MIN_TEXT_LEN=4 → 2 |
 | `server/Dockerfile` | pip 改用清华镜像 |
-| `PsyGuard-iOS/ServerRelay.swift` | bufferThreshold 4096→1600，flushAndStop()，stopped标志防重连，relayDidReceiveInterim，parseAlert处理interim类型 |
-| `PsyGuard-iOS/AppViewModel.swift` | toggleRecording顺序修正，BLE断线重置，通知音default，usePhoneMic开关，MicCapture集成，currentSentence，relayDidReceiveInterim；**bleStateChanged(.idle)增加usePhoneMic判断防止误停麦克风录音** |
-| `PsyGuard-iOS/ContentView.swift` | 录音按钮双重检查，手机麦克风调试Toggle，transcriptBox分层显示（黑=已确认/橙=识别中） |
-| `PsyGuard-iOS/MicCapture.swift` | AVAudioEngine采集16kHz 16bit PCM mono，AVAudioConverter重采样；**startEngine增加converter nil检查，失败时抛错而非静默丢音** |
-| `web/client.html` | **downsample改线性插值**（原最近邻，降采样混叠影响识别率） |
+| `PsyGuard-iOS/ServerRelay.swift` | bufferThreshold 4096→1600，flushAndStop()，stopped标志防重连，relayDidReceiveInterim，parseAlert处理interim |
+| `PsyGuard-iOS/AppViewModel.swift` | toggleRecording顺序，BLE断线重置，usePhoneMic开关，MicCapture集成，currentSentence；bleStateChanged(.idle)判断usePhoneMic防止误停麦克风 |
+| `PsyGuard-iOS/ContentView.swift` | 麦克风调试Toggle，transcriptBox分层（黑=确认/橙=识别中） |
+| `PsyGuard-iOS/MicCapture.swift` | AVAudioEngine 16kHz PCM；startEngine增加converter nil检查 |
+| `PsyGuard-iOS/BLEManager.swift` | sendControl写类型自动检测；新增 didUpdateNotificationStateFor / didWriteValueFor 诊断回调 |
+| `web/client.html` | downsample改线性插值（原最近邻，影响识别率） |
 | `PsyGuard-iOS/Info.plist` | 新增 NSMicrophoneUsageDescription |
 | `PsyGuard-iOS/PsyGuard.xcodeproj/project.pbxproj` | 新增 MicCapture.swift 编译引用 |
-| `PsyGuard-Arduino/PsyGuard.ino` | PDM.setGain(30)，PDM buffer overflow 保护 |
+| `PsyGuard-Arduino/PsyGuard/PsyGuard.ino` | BLE.poll()、BLEWrite+BLEWriteWithoutResponse、**gain=35**、**16kHz→8kHz软件降采样+3点均值滤波**、**BLE.setConnectionInterval(12,12)** |
+| `PsyGuard-Arduino/PDMTest/PDMTest.ino` | 新建：PDM 独立测试草图，不启动 BLE，录音经串口传电脑 |
+| `test_pdm.py` | 新建：串口录音分析脚本，保存WAV + 振幅分析 + 播放 |
+| `ble_record.py` | 新建：BLE直连Mac录音工具，自动计算有效采样率，按Ctrl+C停止保存 |
 | `test_file.py` | 用音频文件测试服务器（afconvert需用 `-d 'LEI16@16000'`） |
 
 ---
@@ -147,7 +171,7 @@ ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
 |---|---|---|
 | `"START"` | string | 开始录制，服务器创建讯飞 session |
 | `"STOP"` | string | 停止录制，服务器 flush 并关闭 session |
-| 二进制数据 | bytes | 16kHz 16bit PCM mono 音频块 |
+| 二进制数据 | bytes | 8kHz 16bit PCM mono 音频块（XIAO路径）|
 
 ### 服务器 → 客户端
 | 消息 | 说明 |
@@ -188,9 +212,9 @@ BLE 设备广播名：`PsyGuard`（iOS 过滤条件：name 含 XIAO/Sense/Psy/Ar
 
 ### 音频格式
 
-- 单声道，16kHz，16-bit PCM，小端序
+- 单声道，**8kHz**，16-bit PCM，小端序（XIAO 固件软件降采样后）
 - BLE 分包 244 字节/包
-- 手机缓冲 ~50ms（1600字节）后发服务器
+- 手机缓冲 ~100ms（1600字节）后发服务器
 
 ---
 
@@ -201,26 +225,31 @@ BLE 设备广播名：`PsyGuard`（iOS 过滤条件：name 含 XIAO/Sense/Psy/Ar
 | 文件 | 用途 | 连接地址 |
 |---|---|---|
 | `client.html` | 网页版客户端，测试 ASR + 预警 | `ws://150.158.146.192:8097` |
-| `admin.html` | 管理后台，查看会话/录音下载 | WS: `ws://150.158.146.192:8097/admin`，下载: `http://150.158.146.192:8097` |
+| `admin.html` | 管理后台，查看会话/录音下载 | WS: `ws://150.158.146.192:8097/admin` |
 
-**重要**：
-- `ws://` 不能在浏览器地址栏直接打开，必须**本地双击打开 HTML 文件**，页面内的输入框填好地址后点连接
-- 端口 **8097 已同时处理 WebSocket 和录音下载**（`GET /recording/{sid}` 通过 `process_request` 钩子在同一端口服务），无需开放 8098
-- 要分享给别人使用：直接发 HTML 文件，对方本地打开即可，**不要发 ws:// URL**
+**重要**：必须**本地双击打开 HTML 文件**使用，不能在浏览器地址栏输入 ws:// 地址。
 
 ---
 
 ## 验证步骤
 
 ```bash
-# 1. 测试连通性
+# 1. 测试服务器连通性
 npx wscat -c ws://150.158.146.192:8097
 # 发送: START → 预期: ACK:START
 
 # 2. 用录音文件端到端测试（推荐）
 python3 test_file.py 录音.m4a ws://150.158.146.192:8097
 
-# 3. 查服务器日志
+# 3. BLE 直连录音测试（验证 XIAO 音频质量）
+/Users/hushaohong/.local/bin/python3.11 ble_record.py
+# 按 Ctrl+C 停止，录音保存到 ~/Desktop/xiao_recordings/
+
+# 4. PDM 独立测试（排查硬件噪声，不启动 BLE）
+# 先烧录 PsyGuard-Arduino/PDMTest/PDMTest.ino
+python3 test_pdm.py
+
+# 5. 查服务器日志
 python3 -c "
 import paramiko
 ssh = paramiko.SSHClient()
@@ -237,11 +266,11 @@ print(o.read().decode())
 
 | 文件 | 职责 |
 |---|---|
-| `BLEManager.swift` | CoreBluetooth 扫描/连接/接收音频数据 |
+| `BLEManager.swift` | CoreBluetooth 扫描/连接/接收音频数据，写类型自动检测 |
 | `ServerRelay.swift` | WebSocket 连接服务器，缓冲发送，解析预警/字幕/中间结果 |
 | `AppViewModel.swift` | 业务逻辑，连接 BLE 和 Server 两层，发系统通知，手机麦克风模式 |
 | `ContentView.swift` | SwiftUI：状态栏、录音按钮、麦克风调试开关、实时字幕、预警列表 |
-| `MicCapture.swift` | AVAudioEngine 采集手机麦克风，输出与 XIAO 相同的 16kHz PCM 格式 |
+| `MicCapture.swift` | AVAudioEngine 采集手机麦克风，输出 16kHz PCM（待同步改为 8kHz） |
 | `PsyGuardApp.swift` | App 入口，申请通知权限 |
 
-服务器 URL 在 `ServerRelay.swift` 第 46 行修改。
+服务器 URL 在 `ServerRelay.swift` 第 47 行修改。

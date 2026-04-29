@@ -64,7 +64,7 @@ LLM_BASE_URL     = os.getenv("LLM_BASE_URL", "http://localhost:8086/v1")
 LLM_MODEL        = os.getenv("LLM_MODEL", "gemma-4-E4B-it-Q4_K_M.gguf")
 LLM_API_KEY      = os.getenv("LLM_API_KEY", "none")
 
-SAMPLE_RATE      = 16000
+SAMPLE_RATE      = 8000
 SAMPLE_WIDTH     = 2
 CHANNELS         = 1
 
@@ -92,6 +92,7 @@ admin_connections: set = set()
 
 async def broadcast_admin(msg: dict):
     """Broadcast a JSON message to all connected admin WebSocket clients."""
+    global admin_connections
     if not admin_connections:
         return
     text = json.dumps(msg, ensure_ascii=False)
@@ -261,6 +262,7 @@ class XunfeiStreamSession:
         self._task           = None
         self._sentence_buf: dict[int, str] = {}  # 跨重连保留，stop时 flush
         self._needs_reconnect = False  # 句子完成后主动触发重连
+        self._text_tasks: set[asyncio.Task] = set()  # 追踪 on_text LLM 任务，stop 时确保完成
 
     async def start(self):
         self._running = True
@@ -279,6 +281,13 @@ class XunfeiStreamSession:
             except asyncio.CancelledError:
                 pass
         await self._flush_pending()  # 停录时把未确认句子全部输出
+        # 等待所有 on_text LLM 任务完成（最多10s），防止 http_session 关闭前漏报
+        pending = {t for t in self._text_tasks if not t.done()}
+        if pending:
+            done, still_pending = await asyncio.wait(pending, timeout=10)
+            for t in still_pending:
+                t.cancel()
+        self._text_tasks.clear()
         log.info("[ASR/stream] session closed")
 
     async def _flush_pending(self):
@@ -352,7 +361,7 @@ class XunfeiStreamSession:
                             },
                             "data": {
                                 "status": status,
-                                "format": "audio/L16;rate=16000",
+                                "format": "audio/L16;rate=8000",
                                 "encoding": "raw",
                                 "audio": base64.b64encode(chunk).decode(),
                             },
@@ -362,7 +371,7 @@ class XunfeiStreamSession:
                         frame = {
                             "data": {
                                 "status": status,
-                                "format": "audio/L16;rate=16000",
+                                "format": "audio/L16;rate=8000",
                                 "encoding": "raw",
                                 "audio": base64.b64encode(chunk).decode(),
                             }
@@ -438,10 +447,14 @@ class XunfeiStreamSession:
                     for orphan_sn in sorted(k for k in self._sentence_buf if k < sn):
                         orphan_text = self._sentence_buf.pop(orphan_sn, "").strip()
                         if orphan_text:
-                            asyncio.create_task(self._on_text(orphan_text))
+                            t = asyncio.create_task(self._on_text(orphan_text))
+                            self._text_tasks.add(t)
+                            t.add_done_callback(self._text_tasks.discard)
                     full_text = self._sentence_buf.pop(sn, "").strip()
                     if full_text:
-                        asyncio.create_task(self._on_text(full_text))
+                        t = asyncio.create_task(self._on_text(full_text))
+                        self._text_tasks.add(t)
+                        t.add_done_callback(self._text_tasks.discard)
                     # 句子已全部确认，主动触发重连（不等讯飞 10s 超时）
                     if not self._sentence_buf:
                         self._needs_reconnect = True

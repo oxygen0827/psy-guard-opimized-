@@ -60,8 +60,10 @@
 ```
 psy-guard/
 ├── PsyGuard-Arduino/
-│   └── PsyGuard/
-│       └── PsyGuard.ino        # XIAO nRF52840 Sense 固件
+│   ├── PsyGuard/
+│   │   └── PsyGuard.ino        # XIAO nRF52840 Sense 固件（主程序）
+│   └── PDMTest/
+│       └── PDMTest.ino         # PDM 麦克风独立测试（不启动 BLE，用于硬件诊断）
 ├── PsyGuard-iOS/
 │   ├── PsyGuard.xcodeproj/     # Xcode 工程
 │   ├── BLEManager.swift        # CoreBluetooth BLE 管理
@@ -78,6 +80,8 @@ psy-guard/
 │   ├── client.html             # 网页版客户端（测试 ASR + 预警）
 │   └── admin.html              # 管理后台（会话监控 + 录音下载）
 ├── test_file.py                # 用音频文件测试服务器（绕过麦克风）
+├── test_pdm.py                 # PDM 麦克风串口录音分析脚本（配合 PDMTest.ino）
+├── ble_record.py               # BLE 直连录音测试（Mac bleak，验证 BLE 路径音频质量）
 └── README.md
 ```
 
@@ -88,7 +92,7 @@ psy-guard/
 **Seeed Studio XIAO nRF52840 Sense**
 
 - Nordic nRF52840，ARM Cortex-M4 @ 64 MHz，BLE 5.0
-- 板载 PDM 麦克风（MSM261D3526H1CPM），16kHz/16bit，增益 30
+- 板载 PDM 麦克风（MSM261D3526H1CPM），PDM 硬件 16kHz 采集，软件降采样到 8kHz 后经 BLE 传输，增益 35
 - 配合锂电池可随身使用
 
 **Arduino 开发环境**
@@ -111,7 +115,7 @@ psy-guard/
 | `...0003` | 开发板 → 手机 | PCM 音频数据（Notify，244字节/包） |
 | `...0002` | 手机 → 开发板 | 控制指令（`0x01`=开始，`0x00`=停止） |
 
-音频格式：PCM 16bit LE，单声道，16000 Hz
+音频格式：PCM 16bit LE，单声道，8000 Hz（固件软件降采样后）
 
 ---
 
@@ -281,38 +285,53 @@ python3 test_file.py 录音.m4a ws://150.158.146.192:8097
 
 ---
 
+## BLE 直连录音测试（验证 XIAO 音频质量）
+
+用 Mac 直接通过 BLE 连接 XIAO，接收音频并保存 WAV，用于判断 BLE 路径下音频是否清晰，无需 iOS App。
+
+**安装依赖**（必须用 python3.11，Xcode 自带 python3.9 与 bleak 不兼容）：
+
+```bash
+/Users/hushaohong/.local/bin/python3.11 -m pip install bleak --break-system-packages
+```
+
+**启动录音**（按 Ctrl+C 随时停止）：
+
+```bash
+/Users/hushaohong/.local/bin/python3.11 ble_record.py
+```
+
+**录音保存位置**：`~/Desktop/xiao_recordings/`
+
+脚本自动分析 RMS/Max/静音占比，辅助判断音频质量。
+
+---
+
 ## 实现状态
 
 | 模块 | 功能 | 状态 |
 |---|---|---|
-| 硬件 | PDM 采集（增益30）+ BLE 传输 | 代码完成，**需重新烧录** |
+| 硬件 | BLE 连接 iOS、数据传输到服务器 | ✅ 已验证 |
+| 硬件 | PDM 麦克风硬件验证（无 BLE） | ✅ 已确认正常（RMS=137，音频干净） |
+| 硬件 | BLE 路径音频质量 | ✅ 已解决（gain=35，8kHz降采样+抗混叠滤波，连接间隔15ms） |
 | iOS | BLE 连接 + 中继 + 预警展示 | 代码完成，**需重新安装** |
-| iOS | 手机麦克风调试模式 | 代码完成，**需重新安装** |
+| iOS | 手机麦克风调试模式 | ✅ 已验证可用 |
 | iOS | 实时中间字幕（橙色） | 代码完成，**需重新安装** |
 | iOS | 系统本地通知（锁屏可见） | 完成 |
 | iOS | 录音顺序/断线恢复/重连控制 | 完成 |
-| 服务器 | 讯飞流式 ASR（pgs/sn/ls 正确） | **已部署** |
-| 服务器 | 实时中间字幕推送（interim） | **已部署** |
-| 服务器 | 句子完成后主动重连（消除死区） | **已部署** |
-| 服务器 | flush_pending 防丢句子 | **已部署** |
-| 服务器 | vad_eos=500ms | **已部署** |
-| 服务器 | 管理员实时监控（broadcast_admin） | **已部署（修复 UnboundLocalError）** |
-| 服务器 | 录音下载（8097 端口，无需开放 8098） | **已部署** |
-| 服务器 | ASR 延时累积修复（MAX_BUF_BYTES=160ms） | **已部署** |
-| 服务器 | on_text await process_text 防止最后几句漏报预警 | **已部署** |
-| 服务器 | _process_request legacy API 兼容修复（原版致所有连接 500） | **已部署** |
-| 网页 | client.html downsample 线性插值（改善 ASR 识别率） | **已更新** |
-| iOS | MicCapture AVAudioConverter nil 检查 | 代码完成，**需重新安装** |
-| iOS | BLE 掉线不打断手机麦克风录音 | 代码完成，**需重新安装** |
-| 服务器 | FunASR 本地模式 | 完成 |
-| 服务器 | Whisper API 云端模式 | 完成 |
-| 服务器 | SQLite 持久化 | 完成 |
-| 服务器 | 管理员 Webhook 推送 | 完成 |
-| 端到端 | iOS→服务器连接验证 | ✅ 已验证 |
-| 端到端 | 语音识别+LLM预警验证 | ✅ 已验证（手机麦克风） |
-| 端到端 | 管理员监控+录音下载验证 | ✅ 已验证（web admin） |
-| 端到端 | XIAO固件+完整链路 | 待重烧固件后验证 |
-| iOS | BLE 后台保持连接 | 待验证 |
+| 服务器 | 讯飞流式 ASR（pgs/sn/ls 正确） | ✅ 已部署 |
+| 服务器 | 实时中间字幕推送（interim） | ✅ 已部署 |
+| 服务器 | 句子完成后主动重连（消除死区） | ✅ 已部署 |
+| 服务器 | broadcast_admin UnboundLocalError 修复 | ✅ 已部署 |
+| 服务器 | _recv_loop on_text 任务追踪（防断线漏报） | ✅ 已部署 |
+| 服务器 | 录音下载（8097 端口，无需开放 8098） | ✅ 已部署 |
+| 服务器 | 采样率更新为 8kHz（配合 XIAO 降采样） | ✅ 已部署 |
+| 服务器 | FunASR 本地模式 / Whisper API 云端模式 | 完成 |
+| 服务器 | SQLite 持久化 + 管理员 Webhook 推送 | 完成 |
+| 端到端 | iOS 手机麦克风→服务器→识别→LLM预警 | ✅ 已验证 |
+| 端到端 | 管理员监控+录音下载 | ✅ 已验证 |
+| 端到端 | XIAO 语音完整链路（无噪音识别） | ⬜ 待 iOS App 重装后联调 |
+| iOS | BLE 后台保持连接 | ⬜ 待验证 |
 
 ---
 

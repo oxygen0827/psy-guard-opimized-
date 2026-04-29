@@ -59,10 +59,16 @@ final class BLEManager: NSObject, ObservableObject {
 
     /// 发送开始/停止录音指令到开发板
     func sendControl(_ start: Bool) {
-        guard let p = peripheral, let char = rxChar else { return }
+        guard let p = peripheral, let char = rxChar else {
+            print("[BLE] sendControl failed: peripheral=\(peripheral != nil), rxChar=\(rxChar != nil)")
+            return
+        }
         let byte: UInt8 = start ? 1 : 0
-        p.writeValue(Data([byte]), for: char, type: .withResponse)
+        // 使用 withoutResponse（兼容 BLEWriteWithoutResponse 特征），减少握手失败风险
+        let writeType: CBCharacteristicWriteType = char.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
+        p.writeValue(Data([byte]), for: char, type: writeType)
         isRecording = start
+        print("[BLE] sendControl: \(start ? "START" : "STOP"), writeType=\(writeType == .withoutResponse ? "withoutResponse" : "withResponse")")
     }
 }
 
@@ -160,5 +166,24 @@ extension BLEManager: CBPeripheralDelegate {
         guard characteristic.uuid == kTXCharUUID,
               let data = characteristic.value else { return }
         delegate?.bleDidReceiveAudio(data)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didUpdateNotificationStateFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        if let error {
+            print("[BLE] 订阅 TX 通知失败: \(error.localizedDescription)")
+            delegate?.bleDidFailWithError("订阅音频通知失败: \(error.localizedDescription)")
+        } else {
+            print("[BLE] TX 通知订阅成功，isNotifying=\(characteristic.isNotifying)")
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didWriteValueFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        if let error {
+            print("[BLE] 写入控制指令失败: \(error.localizedDescription)")
+        }
     }
 }
