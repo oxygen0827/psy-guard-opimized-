@@ -256,9 +256,9 @@ class XunfeiStreamSession:
     持久讯飞 IAT WebSocket 会话。
     单一主循环处理连接、发送、接收和重连，避免竞态。
     """
-    CHUNK_SIZE      = 1280   # 40ms @ 16kHz 16bit mono
+    CHUNK_SIZE      = 1280   # 80ms @ 8kHz 16bit mono
     SESSION_MAX_SEC = 55     # 接近讯飞 60s 限制前重连
-    MAX_BUF_BYTES   = 1280 * 4  # 160ms 上限；重连期间积压音频超过此值则丢弃最旧的部分
+    MAX_BUF_BYTES   = 1280 * 40  # ~3.2s @ 8kHz；覆盖讯飞重连期间（~1-2s），防止音频丢失
 
     def __init__(self, on_text, on_interim=None):
         self._on_text        = on_text
@@ -931,11 +931,25 @@ async def start_http_server():
 #  HTTP GET /recording/{sid} on the same WS port（不依赖 8098）
 # ─────────────────────────────────────────────────────────────
 async def _process_request(path, request_headers):
-    """Intercept plain HTTP GET /recording/{sid} on port 8097.
+    """Intercept plain HTTP GET requests on port 8097.
     websockets 12.x legacy API: signature is (path: str, headers: Headers).
     Return None to proceed with WS upgrade, or (HTTPStatus, headers, body) for HTTP response.
     """
     from http import HTTPStatus
+
+    # Serve static web files — only for plain HTTP (not WebSocket upgrade)
+    is_ws_upgrade = request_headers.get("Upgrade", "").lower() == "websocket"
+    WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
+    if not is_ws_upgrade and path in ("/", "/client.html", "/admin.html"):
+        fname = "client.html" if path in ("/", "/client.html") else "admin.html"
+        fpath = os.path.join(WEB_DIR, fname)
+        if os.path.exists(fpath):
+            with open(fpath, "rb") as f:
+                body = f.read()
+            return (HTTPStatus.OK, [
+                ("Content-Type", "text/html; charset=utf-8"),
+                ("Content-Length", str(len(body))),
+            ], body)
 
     if not path.startswith("/recording/"):
         return None  # proceed with WebSocket upgrade
@@ -989,7 +1003,18 @@ async def main():
     async def _handle(ws):
         await handle(ws, db)
 
-    async with websockets.serve(_handle, "0.0.0.0", PORT, max_size=2**20, process_request=_process_request):
+    import ssl as _ssl_mod
+    _ssl_ctx = None
+    _cert, _key = "/data/cert.pem", "/data/key.pem"
+    if os.path.exists(_cert) and os.path.exists(_key):
+        _ssl_ctx = _ssl_mod.SSLContext(_ssl_mod.PROTOCOL_TLS_SERVER)
+        _ssl_ctx.load_cert_chain(_cert, _key)
+        log.info(f"[SSL] TLS enabled → wss://0.0.0.0:{PORT}")
+    else:
+        log.info(f"[SSL] no cert found, running plain ws://")
+
+    async with websockets.serve(_handle, "0.0.0.0", PORT, max_size=2**20,
+                                process_request=_process_request, ssl=_ssl_ctx):
         await asyncio.Future()
 
 if __name__ == "__main__":

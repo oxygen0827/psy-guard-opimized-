@@ -182,7 +182,7 @@
   <div class="card">
     <div class="card-label">服务器</div>
     <div class="conn-bar">
-      <input type="text" id="urlInput" value="ws://150.158.146.192:8097" placeholder="ws://host:port">
+      <input type="text" id="urlInput" value="wss://150.158.146.192:8097" placeholder="wss://host:port">
       <button class="btn btn-blue" id="connBtn" onclick="toggleConnect()">连接</button>
     </div>
   </div>
@@ -355,22 +355,22 @@
 
     // All steps after getUserMedia are wrapped — clean up mic if anything fails
     try {
-      // Try native 16kHz; fall back to device default rate with manual resampling
+      // Try native 8kHz; fall back to device default rate with manual resampling
       try {
-        audioCtx = new AudioContext({ sampleRate: 16000 });
+        audioCtx = new AudioContext({ sampleRate: 8000 });
       } catch {
         audioCtx = new AudioContext();
       }
       const nativeRate = audioCtx.sampleRate;
 
       const src = audioCtx.createMediaStreamSource(micStream);
-      processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processor = audioCtx.createScriptProcessor(1024, 1, 1);
       processor.onaudioprocess = (e) => {
         if (!recording) return;
         const float32 = e.inputBuffer.getChannelData(0);
-        const data = nativeRate === 16000
+        const data = nativeRate === 8000
           ? float32ToInt16(float32)
-          : float32ToInt16(downsample(float32, nativeRate, 16000));
+          : float32ToInt16(downsample(float32, nativeRate, 8000));
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(data.buffer);
       };
       src.connect(processor);

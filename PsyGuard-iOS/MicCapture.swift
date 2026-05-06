@@ -9,7 +9,7 @@ final class MicCapture {
 
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16,
-        sampleRate:   16000,
+        sampleRate:   8000,
         channels:     1,
         interleaved:  true
     )!
