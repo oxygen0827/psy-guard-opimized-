@@ -125,6 +125,13 @@
     .stat-box.sentences .stat-num { color: var(--blue); }
     .stat-box.alerts    .stat-num { color: var(--red); }
 
+    /* ── VAD meter ── */
+    .vad-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 12px; color: var(--text-muted); }
+    .vad-track { flex: 1; height: 8px; background: var(--bg); border-radius: 4px; position: relative; overflow: hidden; border: 1px solid var(--border); }
+    .vad-fill { height: 100%; width: 0%; border-radius: 4px; transition: width 0.05s; background: var(--green); }
+    .vad-fill.active { background: var(--blue); }
+    .vad-threshold-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--orange); opacity: 0.8; }
+
     /* ── Transcript ── */
     .transcript-scroll {
       min-height: 140px; max-height: 280px; overflow-y: auto;
@@ -195,6 +202,14 @@
         <button class="record-btn idle" id="recordBtn" onclick="toggleRecording()" disabled>🎙️</button>
         <span class="record-hint" id="recordHint">连接服务器后可录音</span>
       </div>
+      <div class="vad-row">
+        <span>音量</span>
+        <div class="vad-track">
+          <div class="vad-fill" id="vadFill"></div>
+          <div class="vad-threshold-line" id="vadLine"></div>
+        </div>
+        <span id="vadLabel">—</span>
+      </div>
     </div>
 
     <!-- 统计 -->
@@ -242,6 +257,29 @@
   let interimText = '';
   let recordStartTime = 0;
   let recordTimerId = null;
+
+  // ── VAD（客户端声音活动检测）──────────────────────────────────
+  // 低于此 RMS 阈值的帧发送零帧（静音），防止环境噪声被识别为"嗯嗯嗯"
+  const VAD_THRESHOLD = 0.015;
+
+  function calcRMS(f32) {
+    let sum = 0;
+    for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
+    return Math.sqrt(sum / f32.length);
+  }
+
+  function updateVadMeter(rms, active) {
+    const pct = Math.min(100, rms / 0.15 * 100);
+    const fill = document.getElementById('vadFill');
+    const line = document.getElementById('vadLine');
+    const label = document.getElementById('vadLabel');
+    fill.style.width = pct.toFixed(1) + '%';
+    fill.className = 'vad-fill' + (active ? ' active' : '');
+    // threshold marker position
+    const thPct = Math.min(100, VAD_THRESHOLD / 0.15 * 100);
+    line.style.left = thPct.toFixed(1) + '%';
+    label.textContent = active ? '说话中' : '静音';
+  }
 
   // ── WebSocket ──────────────────────────────────────────────
   function toggleConnect() {
@@ -347,7 +385,15 @@
 
   async function startRecording() {
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount:     1,      // mono
+          autoGainControl:  false,  // 禁止自动增益——AGC会把背景噪声放大到VAD阈值以上，导致"嗯嗯嗯"
+          noiseSuppression: false,  // 关闭浏览器噪声抑制，让讯飞ASR处理原始信号
+          echoCancellation: false,  // 监听麦克风场景无需回声消除
+        },
+        video: false,
+      });
     } catch (e) {
       alert('无法访问麦克风：' + e.message);
       return;
@@ -368,9 +414,14 @@
       processor.onaudioprocess = (e) => {
         if (!recording) return;
         const float32 = e.inputBuffer.getChannelData(0);
+        const rms = calcRMS(float32);
+        const isSpeech = rms >= VAD_THRESHOLD;
+        updateVadMeter(rms, isSpeech);
+        // 低于阈值时发零帧：让讯飞 VAD 感知到静音边界，但不产生噪声转写
+        const toSend = isSpeech ? float32 : new Float32Array(float32.length);
         const data = nativeRate === 8000
-          ? float32ToInt16(float32)
-          : float32ToInt16(downsample(float32, nativeRate, 8000));
+          ? float32ToInt16(toSend)
+          : float32ToInt16(downsample(toSend, nativeRate, 8000));
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(data.buffer);
       };
       src.connect(processor);
@@ -404,6 +455,7 @@
     interimText = '';
     renderTranscript();
     setRecordUI(false);
+    updateVadMeter(0, false);
   }
 
   function fmtDuration(ms) {
@@ -462,6 +514,13 @@
   function esc(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
+
+  // 页面加载后立即把阈值橙线定位好，不用等录音才显示
+  (function initVadLine() {
+    const line = document.getElementById('vadLine');
+    const thPct = Math.min(100, VAD_THRESHOLD / 0.15 * 100);
+    line.style.left = thPct.toFixed(1) + '%';
+  })();
 </script>
 </body>
 </html>
