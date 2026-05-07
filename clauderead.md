@@ -1,4 +1,4 @@
-# PsyGuard 项目当前状态（2026-05-07，第五次更新）
+# PsyGuard 项目当前状态（2026-05-07，第六次更新）
 
 > 给下一个 Claude 实例快速上手用。本文件优先于 CLAUDE.md 中的旧信息。
 
@@ -81,6 +81,13 @@
   12. `_process_request` legacy API 兼容（签名改为 `(path, headers)`，返回三元组）
   13. `_recv_loop` on_text 任务追踪（`_text_tasks` set + `stop()` 等待完成，防断线漏最后几句）
 
+- **语料库集成（2026-05-07）**：
+  - 新增 `server/corpus.json`（150条，4类：政治/严重危害行为/违背伦理/技术不当）
+  - `server.py` 启动时自动加载语料库，动态构建 System Prompt
+  - 语料库每类取6条典型句式注入 LLM 上下文，提升专业违规检测精度
+  - 级别映射：一级(政治)→high；二级/危害行为→high；二级/违背伦理→medium；三级/技术不当→low
+  - 同时保留原有来访者危机信号检测逻辑
+
 - **Web 客户端 VAD 修复（2026-05-07）**：
   - `web/client.html` 加入客户端声音活动检测（VAD_THRESHOLD=0.015）
   - 低于阈值时发零帧，避免环境底噪被识别为"嗯嗯嗯"
@@ -161,6 +168,8 @@ ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
 | `PsyGuard-iOS/MicCapture.swift` | AVAudioEngine 16kHz PCM；startEngine增加converter nil检查 |
 | `PsyGuard-iOS/BLEManager.swift` | sendControl写类型自动检测；新增 didUpdateNotificationStateFor / didWriteValueFor 诊断回调 |
 | `web/client.html` | downsample改线性插值（原最近邻，影响识别率）；客户端VAD（VAD_THRESHOLD=0.015）；getUserMedia禁用autoGainControl/noiseSuppression/echoCancellation；实时音量条+阈值橙线 |
+| `server/corpus.json` | 新建：AI心理督导语料库，150条，4类，来源Excel |
+| `server/server.py` | _load_corpus()/_build_system_prompt()动态构建LLM提示词；语料库6条/类注入；System Prompt扩展咨询师违规检测 |
 | `PsyGuard-iOS/Info.plist` | 新增 NSMicrophoneUsageDescription |
 | `PsyGuard-iOS/PsyGuard.xcodeproj/project.pbxproj` | 新增 MicCapture.swift 编译引用 |
 | `PsyGuard-Arduino/PsyGuard/PsyGuard.ino` | BLE.poll()、BLEWrite+BLEWriteWithoutResponse、**gain=35**、**16kHz→8kHz软件降采样+3点均值滤波**、**BLE.setConnectionInterval(12,12)** |
