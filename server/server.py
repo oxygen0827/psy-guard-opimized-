@@ -107,13 +107,11 @@ async def broadcast_admin(msg: dict):
 # ─────────────────────────────────────────────────────────────
 #  语料库加载 + System Prompt 动态构建
 # ─────────────────────────────────────────────────────────────
-import json as _json
-
 def _load_corpus() -> list[dict]:
     path = os.path.join(os.path.dirname(__file__), "corpus.json")
     try:
         with open(path, encoding="utf-8") as f:
-            return _json.load(f)
+            return json.load(f)
     except Exception as e:
         log.warning(f"[corpus] 语料库加载失败，使用内置规则: {e}")
         return []
