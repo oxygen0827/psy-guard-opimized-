@@ -10,7 +10,7 @@
 
 ```
 [XIAO nRF52840 Sense]
-  板载 PDM 麦克风，16kHz/16bit PCM 采集（增益 30）
+  板载 PDM 麦克风，16kHz 采集 → 软件降采样 8kHz（增益 35）
        │ BLE 5.0 Nordic UART Service（244字节/包）
        ▼
 [iPhone App（Swift / SwiftUI）]
@@ -74,6 +74,7 @@ psy-guard/
 │   └── PsyGuardApp.swift       # App 入口（通知权限申请）
 ├── server/
 │   ├── server.py               # WebSocket 服务（三模式 ASR + LLM）
+│   ├── corpus.json             # AI心理督导语料库（150条，启动时注入LLM提示词）
 │   ├── Dockerfile
 │   └── docker-compose.yml
 ├── web/
@@ -137,7 +138,7 @@ psy-guard/
 录音按钮上方有"手机麦克风（调试）"开关，打开后：
 - 不需要 XIAO 设备连接
 - 直接用 iPhone 麦克风采集音频
-- 格式与 XIAO 完全一致（16kHz 16bit PCM mono）
+- 格式与 XIAO 完全一致（8kHz 16bit PCM mono）
 - 可验证服务器端识别是否正常，独立于固件问题
 
 **实时字幕**
@@ -200,10 +201,12 @@ docker compose up -d --build
 docker logs -f psy-guard
 ```
 
-> **注意**：当前服务器上的 `server.py` 通过 `docker cp` 注入，不在镜像内。
+> **注意**：当前服务器上的 `server.py` 和 `corpus.json` 通过 `docker cp` 注入，不在镜像内。
 > 每次重启容器后需重新注入：
 > ```bash
-> docker cp ~/psy-guard/server.py psy-guard:/app/server.py && docker restart psy-guard
+> docker cp ~/psy-guard/server.py psy-guard:/app/server.py
+> docker cp ~/psy-guard/corpus.json psy-guard:/app/corpus.json
+> docker restart psy-guard
 > ```
 
 ### 备用方式：本地 FunASR
@@ -340,6 +343,7 @@ python3 test_file.py 录音.m4a ws://150.158.146.192:8097
 | 端到端 | 管理员监控+录音下载 | ✅ 已验证 |
 | 端到端 | XIAO 语音完整链路（无噪音识别） | ⬜ 待 iOS App 重装后联调 |
 | Web | 客户端 VAD + 禁用 AGC（消除"嗯嗯嗯"误识别） | ✅ 已部署 |
+| 服务器 | AI心理督导语料库集成（150条，动态注入LLM提示词） | ✅ 已部署 |
 | iOS | BLE 后台保持连接 | ⬜ 待验证 |
 
 ---

@@ -33,7 +33,7 @@
 |---|---|
 | IP | 150.158.146.192 |
 | 用户名 | ubuntu |
-| 密码 | @Nchu1234 |
+| 密码 | @Nchu152535 |
 | SSH | `ssh ubuntu@150.158.146.192`（标准 22 端口）|
 | 服务器型号 | Ubuntu 24.04 LTS，4核，3.5GB RAM，59GB磁盘 |
 | Docker | 27.5.1，Docker Compose v2.32.4 |
@@ -150,7 +150,7 @@ docker restart psy-guard
 import paramiko
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
+ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu152535')
 ```
 
 ---
@@ -165,11 +165,11 @@ ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
 | `PsyGuard-iOS/ServerRelay.swift` | bufferThreshold 4096→1600，flushAndStop()，stopped标志防重连，relayDidReceiveInterim，parseAlert处理interim |
 | `PsyGuard-iOS/AppViewModel.swift` | toggleRecording顺序，BLE断线重置，usePhoneMic开关，MicCapture集成，currentSentence；bleStateChanged(.idle)判断usePhoneMic防止误停麦克风 |
 | `PsyGuard-iOS/ContentView.swift` | 麦克风调试Toggle，transcriptBox分层（黑=确认/橙=识别中） |
-| `PsyGuard-iOS/MicCapture.swift` | AVAudioEngine 16kHz PCM；startEngine增加converter nil检查 |
+| `PsyGuard-iOS/MicCapture.swift` | AVAudioEngine 8kHz PCM mono（targetFormat sampleRate=8000）；startEngine增加converter nil检查 |
 | `PsyGuard-iOS/BLEManager.swift` | sendControl写类型自动检测；新增 didUpdateNotificationStateFor / didWriteValueFor 诊断回调 |
 | `web/client.html` | downsample改线性插值（原最近邻，影响识别率）；客户端VAD（VAD_THRESHOLD=0.015）；getUserMedia禁用autoGainControl/noiseSuppression/echoCancellation；实时音量条+阈值橙线 |
 | `server/corpus.json` | 新建：AI心理督导语料库，150条，4类，来源Excel |
-| `server/server.py` | _load_corpus()/_build_system_prompt()动态构建LLM提示词；语料库6条/类注入；System Prompt扩展咨询师违规检测 |
+| `server/server.py` | （续）_load_corpus()/_build_system_prompt()动态构建LLM提示词；语料库6条/类注入；System Prompt扩展咨询师违规检测；移除多余 import json as _json |
 | `PsyGuard-iOS/Info.plist` | 新增 NSMicrophoneUsageDescription |
 | `PsyGuard-iOS/PsyGuard.xcodeproj/project.pbxproj` | 新增 MicCapture.swift 编译引用 |
 | `PsyGuard-Arduino/PsyGuard/PsyGuard.ino` | BLE.poll()、BLEWrite+BLEWriteWithoutResponse、**gain=35**、**16kHz→8kHz软件降采样+3点均值滤波**、**BLE.setConnectionInterval(12,12)** |
@@ -270,7 +270,7 @@ python3 -c "
 import paramiko
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu1234')
+ssh.connect('150.158.146.192', username='ubuntu', password='@Nchu152535')
 _, o, _ = ssh.exec_command('docker logs --tail 50 psy-guard 2>&1')
 print(o.read().decode())
 "
@@ -286,7 +286,7 @@ print(o.read().decode())
 | `ServerRelay.swift` | WebSocket 连接服务器，缓冲发送，解析预警/字幕/中间结果 |
 | `AppViewModel.swift` | 业务逻辑，连接 BLE 和 Server 两层，发系统通知，手机麦克风模式 |
 | `ContentView.swift` | SwiftUI：状态栏、录音按钮、麦克风调试开关、实时字幕、预警列表 |
-| `MicCapture.swift` | AVAudioEngine 采集手机麦克风，输出 16kHz PCM（待同步改为 8kHz） |
+| `MicCapture.swift` | AVAudioEngine 采集手机麦克风，输出 8kHz 16bit PCM mono，格式与 XIAO 一致 |
 | `PsyGuardApp.swift` | App 入口，申请通知权限 |
 
 服务器 URL 在 `ServerRelay.swift` 第 47 行修改。
