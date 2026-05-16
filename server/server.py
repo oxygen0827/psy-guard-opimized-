@@ -19,7 +19,9 @@ psy-guard WebSocket 服务
 """
 
 import asyncio
+import array
 import base64
+import datetime
 import hashlib
 import hmac
 import io
@@ -27,7 +29,7 @@ import json
 import logging
 import os
 import ssl
-import struct
+import sys
 import time
 import traceback
 import uuid
@@ -84,11 +86,28 @@ ADMIN_WEBHOOK_URL= os.getenv("ADMIN_WEBHOOK_URL", "")
 AUDIO_SAVE_DIR   = os.getenv("AUDIO_SAVE_DIR", "/data/recordings")
 HTTP_PORT        = int(os.getenv("HTTP_PORT", "8098"))
 
+VOICEPRINT_PROVIDER = os.getenv("VOICEPRINT_PROVIDER", "tencent").lower()
+VOICEPRINT_GROUP_ID = os.getenv("VOICEPRINT_GROUP_ID", "psy_guard_counselors")
+VOICEPRINT_ENROLL_MIN_SEC = float(os.getenv("VOICEPRINT_ENROLL_MIN_SEC", "8"))
+VOICEPRINT_VERIFY_MIN_SEC = float(os.getenv("VOICEPRINT_VERIFY_MIN_SEC", "2"))
+VOICEPRINT_MAX_SEC = float(os.getenv("VOICEPRINT_MAX_SEC", "30"))
+
+TENCENT_SECRET_ID  = os.getenv("TENCENT_SECRET_ID", "")
+TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY", "")
+TENCENT_REGION     = os.getenv("TENCENT_REGION", "ap-guangzhou")
+
+XFYUN_VOICEPRINT_APPID     = os.getenv("XFYUN_VOICEPRINT_APPID", "")
+XFYUN_VOICEPRINT_APIKEY    = os.getenv("XFYUN_VOICEPRINT_APIKEY", "")
+XFYUN_VOICEPRINT_APISECRET = os.getenv("XFYUN_VOICEPRINT_APISECRET", "")
+XFYUN_VOICEPRINT_SERVICE_ID= os.getenv("XFYUN_VOICEPRINT_SERVICE_ID", "s1aa729d0")
+XFYUN_VOICEPRINT_HOST      = os.getenv("XFYUN_VOICEPRINT_HOST", "api.xf-yun.com")
+
 # ─────────────────────────────────────────────────────────────
 #  Admin session tracking (globals)
 # ─────────────────────────────────────────────────────────────
 active_sessions: dict = {}   # session_id → {session_id, client_ip, started_at, pcm_path}
 admin_connections: set = set()
+voiceprint_registry: dict[tuple[str, str], dict] = {}
 
 async def broadcast_admin(msg: dict):
     """Broadcast a JSON message to all connected admin WebSocket clients."""
@@ -216,12 +235,597 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS transcripts (
                 id TEXT PRIMARY KEY, session_id TEXT, text TEXT, timestamp REAL)
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS voiceprints (
+                speaker_id TEXT NOT NULL,
+                speaker_name TEXT,
+                provider TEXT NOT NULL,
+                provider_voiceprint_id TEXT NOT NULL,
+                group_id TEXT,
+                created_at REAL,
+                updated_at REAL,
+                PRIMARY KEY (speaker_id, provider)
+            )
+        """)
         await db.commit()
         log.info(f"[DB] SQLite ready: {DB_PATH}")
         return db
     except Exception as e:
         log.warning(f"[DB] init failed, running without persistence: {e}")
         return None
+
+# ─────────────────────────────────────────────────────────────
+#  声纹认证（腾讯云主方案 + 讯飞备选）
+# ─────────────────────────────────────────────────────────────
+class VoiceprintError(Exception):
+    def __init__(self, code: str, message: str, *, detail: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.detail = detail or message
+
+
+def _voiceprint_provider_name() -> str:
+    if VOICEPRINT_PROVIDER in ("tencent", "xfyun", "off"):
+        return VOICEPRINT_PROVIDER
+    return "off"
+
+
+def _pcm_duration_sec(pcm: bytes) -> float:
+    return len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
+
+
+def _pcm_rms(pcm: bytes) -> int:
+    if not pcm:
+        return 0
+    try:
+        pcm = pcm[:len(pcm) - (len(pcm) % SAMPLE_WIDTH)]
+        samples = array.array("h")
+        samples.frombytes(pcm)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if not samples:
+            return 0
+        mean_square = sum(int(s) * int(s) for s in samples) / len(samples)
+        return int(mean_square ** 0.5)
+    except Exception:
+        return 0
+
+
+def _pcm8_to_pcm16(pcm: bytes) -> bytes:
+    pcm = pcm[:len(pcm) - (len(pcm) % SAMPLE_WIDTH)]
+    samples = array.array("h")
+    samples.frombytes(pcm)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return b""
+    out = array.array("h")
+    for i, sample in enumerate(samples):
+        next_sample = samples[i + 1] if i + 1 < len(samples) else sample
+        out.append(sample)
+        out.append(int((int(sample) + int(next_sample)) / 2))
+    if sys.byteorder != "little":
+        out.byteswap()
+    return out.tobytes()
+
+
+def _wav_bytes(pcm: bytes, sample_rate: int = 16000) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(SAMPLE_WIDTH)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _validate_voiceprint_audio(pcm: bytes, stage: str) -> dict:
+    duration = _pcm_duration_sec(pcm)
+    min_sec = VOICEPRINT_ENROLL_MIN_SEC if stage == "enroll" else VOICEPRINT_VERIFY_MIN_SEC
+    if duration < min_sec:
+        raise VoiceprintError(
+            "audio_too_short",
+            f"voiceprint audio too short: {duration:.1f}s < {min_sec:.1f}s",
+        )
+    if duration > VOICEPRINT_MAX_SEC:
+        raise VoiceprintError(
+            "audio_too_long",
+            f"voiceprint audio too long: {duration:.1f}s > {VOICEPRINT_MAX_SEC:.1f}s",
+        )
+    rms = _pcm_rms(pcm)
+    if rms < int(os.getenv("VOICEPRINT_MIN_RMS", "20")):
+        raise VoiceprintError("no_human_voice", "voiceprint audio is too quiet")
+    return {"duration_sec": round(duration, 1), "rms": rms}
+
+
+def _json_b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
+
+
+def _utf8_limit(text: str, max_bytes: int) -> str:
+    raw = text.encode("utf-8")[:max_bytes]
+    return raw.decode("utf-8", errors="ignore")
+
+
+class TencentVoiceprintProvider:
+    name = "tencent"
+    endpoint = "https://asr.tencentcloudapi.com"
+    host = "asr.tencentcloudapi.com"
+    service = "asr"
+    version = "2019-06-14"
+
+    def _check_config(self):
+        if not TENCENT_SECRET_ID or not TENCENT_SECRET_KEY:
+            raise VoiceprintError("not_configured", "Tencent voiceprint credentials are not configured")
+
+    @staticmethod
+    def _sign(secret_key: str, date: str, service: str, string_to_sign: str) -> str:
+        def _hmac(key, msg):
+            return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+        secret_date = _hmac(("TC3" + secret_key).encode("utf-8"), date)
+        secret_service = _hmac(secret_date, service)
+        secret_signing = _hmac(secret_service, "tc3_request")
+        return hmac.new(secret_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    async def _call(self, session: aiohttp.ClientSession, action: str, payload: dict) -> dict:
+        self._check_config()
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        timestamp = int(time.time())
+        date = datetime.datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
+        content_type = "application/json; charset=utf-8"
+        canonical_headers = f"content-type:{content_type}\nhost:{self.host}\n"
+        signed_headers = "content-type;host"
+        canonical_request = "\n".join([
+            "POST", "/", "", canonical_headers, signed_headers,
+            hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        ])
+        credential_scope = f"{date}/{self.service}/tc3_request"
+        string_to_sign = "\n".join([
+            "TC3-HMAC-SHA256",
+            str(timestamp),
+            credential_scope,
+            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+        ])
+        signature = self._sign(TENCENT_SECRET_KEY, date, self.service, string_to_sign)
+        authorization = (
+            "TC3-HMAC-SHA256 "
+            f"Credential={TENCENT_SECRET_ID}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        )
+        headers = {
+            "Authorization": authorization,
+            "Content-Type": content_type,
+            "Host": self.host,
+            "X-TC-Action": action,
+            "X-TC-Timestamp": str(timestamp),
+            "X-TC-Version": self.version,
+            "X-TC-Region": TENCENT_REGION,
+        }
+        async with session.post(
+            self.endpoint,
+            data=body.encode("utf-8"),
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=45),
+        ) as resp:
+            raw = await resp.text()
+            try:
+                data = json.loads(raw)
+            except Exception:
+                raise VoiceprintError("bad_response", f"Tencent voiceprint HTTP {resp.status}", detail=raw[:500])
+            response = data.get("Response", {})
+            if resp.status != 200 or response.get("Error"):
+                err = response.get("Error", {})
+                code = err.get("Code", f"http_{resp.status}")
+                msg = err.get("Message", raw[:300])
+                raise VoiceprintError(code, msg)
+            return response
+
+    async def enroll(self, session: aiohttp.ClientSession, speaker_id: str, speaker_name: str, pcm8: bytes) -> dict:
+        pcm16 = _pcm8_to_pcm16(pcm8)
+        wav_data = _wav_bytes(pcm16, sample_rate=16000)
+        payload = {
+            "VoiceFormat": 1,
+            "SampleRate": 16000,
+            "Data": _json_b64(wav_data),
+            "SpeakerNick": _utf8_limit(speaker_name or speaker_id, 32),
+            "GroupId": VOICEPRINT_GROUP_ID,
+        }
+        response = await self._call(session, "VoicePrintEnroll", payload)
+        data = response.get("Data", {})
+        voiceprint_id = data.get("VoicePrintId")
+        if not voiceprint_id:
+            raise VoiceprintError("bad_response", "Tencent enroll response did not include VoicePrintId")
+        return {"provider_voiceprint_id": voiceprint_id, "raw": data}
+
+    async def verify(self, session: aiohttp.ClientSession, provider_voiceprint_id: str, pcm8: bytes) -> dict:
+        pcm16 = _pcm8_to_pcm16(pcm8)
+        wav_data = _wav_bytes(pcm16, sample_rate=16000)
+        payload = {
+            "VoiceFormat": 1,
+            "SampleRate": 16000,
+            "VoicePrintId": provider_voiceprint_id,
+            "Data": _json_b64(wav_data),
+        }
+        response = await self._call(session, "VoicePrintVerify", payload)
+        data = response.get("Data", {})
+        score = float(data.get("Score", 0) or 0)
+        verified = int(data.get("Decision", 0) or 0) == 1
+        return {"verified": verified, "score": score, "raw": data}
+
+    async def delete(self, session: aiohttp.ClientSession, provider_voiceprint_id: str) -> None:
+        await self._call(session, "VoicePrintDelete", {"VoicePrintId": provider_voiceprint_id})
+
+
+class XfyunVoiceprintProvider:
+    name = "xfyun"
+
+    def __init__(self):
+        self.service_id = XFYUN_VOICEPRINT_SERVICE_ID
+        self.path = f"/v1/private/{self.service_id}"
+        self.endpoint = f"https://{XFYUN_VOICEPRINT_HOST}{self.path}"
+        self._group_ready = False
+
+    def _check_config(self):
+        if not (XFYUN_VOICEPRINT_APPID and XFYUN_VOICEPRINT_APIKEY and XFYUN_VOICEPRINT_APISECRET):
+            raise VoiceprintError("not_configured", "Xfyun voiceprint credentials are not configured")
+
+    def _auth_url(self) -> str:
+        self._check_config()
+        date = formatdate(timeval=None, localtime=False, usegmt=True)
+        sign_origin = f"host: {XFYUN_VOICEPRINT_HOST}\ndate: {date}\nPOST {self.path} HTTP/1.1"
+        sig = base64.b64encode(
+            hmac.new(XFYUN_VOICEPRINT_APISECRET.encode(), sign_origin.encode(), hashlib.sha256).digest()
+        ).decode()
+        auth = base64.b64encode(
+            f'api_key="{XFYUN_VOICEPRINT_APIKEY}", algorithm="hmac-sha256", '
+            f'headers="host date request-line", signature="{sig}"'.encode()
+        ).decode()
+        return f"{self.endpoint}?{urlencode({'authorization': auth, 'date': date, 'host': XFYUN_VOICEPRINT_HOST})}"
+
+    @staticmethod
+    def _result_spec(name: str) -> dict:
+        return {name: {"encoding": "utf8", "compress": "raw", "format": "json"}}
+
+    def _base_body(self, func: str, params: dict) -> dict:
+        return {
+            "header": {"app_id": XFYUN_VOICEPRINT_APPID, "status": 3},
+            "parameter": {
+                self.service_id: {
+                    "func": func,
+                    **params,
+                }
+            },
+        }
+
+    def _audio_resource(self, pcm8: bytes) -> dict:
+        pcm16 = _pcm8_to_pcm16(pcm8)
+        return {
+            "encoding": "raw",
+            "sample_rate": 16000,
+            "channels": 1,
+            "bit_depth": 16,
+            "status": 3,
+            "audio": _json_b64(pcm16),
+        }
+
+    async def _call(self, session: aiohttp.ClientSession, body: dict, result_key: str | None = None) -> dict:
+        url = self._auth_url()
+        headers = {
+            "content-type": "application/json",
+            "host": XFYUN_VOICEPRINT_HOST,
+            "appid": XFYUN_VOICEPRINT_APPID,
+        }
+        async with session.post(
+            url,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=45),
+        ) as resp:
+            raw = await resp.text()
+            try:
+                data = json.loads(raw)
+            except Exception:
+                raise VoiceprintError("bad_response", f"Xfyun voiceprint HTTP {resp.status}", detail=raw[:500])
+            header = data.get("header", {})
+            code = int(header.get("code", -1))
+            if resp.status != 200 or code != 0:
+                raise VoiceprintError(str(code), header.get("message", raw[:300]))
+            if not result_key:
+                return data
+            text = data.get("payload", {}).get(result_key, {}).get("text", "")
+            if not text:
+                return {}
+            try:
+                return json.loads(base64.b64decode(text).decode("utf-8"))
+            except Exception as e:
+                raise VoiceprintError("bad_response", f"Xfyun {result_key} decode failed: {e}")
+
+    async def _ensure_group(self, session: aiohttp.ClientSession):
+        if self._group_ready:
+            return
+        body = self._base_body("createGroup", {
+            "groupId": VOICEPRINT_GROUP_ID[:32],
+            "groupName": VOICEPRINT_GROUP_ID[:32],
+            "groupInfo": "psy-guard counselors",
+            **self._result_spec("createGroupRes"),
+        })
+        try:
+            await self._call(session, body, "createGroupRes")
+        except VoiceprintError as e:
+            if "already" not in e.message.lower() and "存在" not in e.message:
+                raise
+        self._group_ready = True
+
+    @staticmethod
+    def _feature_id(speaker_id: str) -> str:
+        allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+        cleaned = "".join(c if c in allowed else "_" for c in speaker_id)
+        if cleaned and len(cleaned) <= 32:
+            return cleaned
+        digest = hashlib.sha1(speaker_id.encode("utf-8")).hexdigest()[:20]
+        prefix = (cleaned[:10].strip("_") or "spk")
+        return f"{prefix}_{digest}"[:32]
+
+    async def enroll(self, session: aiohttp.ClientSession, speaker_id: str, speaker_name: str, pcm8: bytes) -> dict:
+        await self._ensure_group(session)
+        feature_id = self._feature_id(speaker_id)
+        body = self._base_body("createFeature", {
+            "groupId": VOICEPRINT_GROUP_ID[:32],
+            "featureId": feature_id,
+            "featureInfo": (speaker_name or speaker_id)[:256],
+            **self._result_spec("createFeatureRes"),
+        })
+        body["payload"] = {"resource": self._audio_resource(pcm8)}
+        try:
+            result = await self._call(session, body, "createFeatureRes")
+        except VoiceprintError as e:
+            if "exist" not in e.message.lower() and "存在" not in e.message:
+                raise
+            body = self._base_body("updateFeature", {
+                "groupId": VOICEPRINT_GROUP_ID[:32],
+                "featureId": feature_id,
+                "featureInfo": (speaker_name or speaker_id)[:256],
+                **self._result_spec("updateFeatureRes"),
+            })
+            body["payload"] = {"resource": self._audio_resource(pcm8)}
+            result = await self._call(session, body, "updateFeatureRes")
+        return {"provider_voiceprint_id": result.get("featureId", feature_id), "raw": result}
+
+    async def verify(self, session: aiohttp.ClientSession, provider_voiceprint_id: str, pcm8: bytes) -> dict:
+        await self._ensure_group(session)
+        body = self._base_body("searchScoreFea", {
+            "groupId": VOICEPRINT_GROUP_ID[:32],
+            "dstFeatureId": provider_voiceprint_id,
+            **self._result_spec("searchScoreFeaRes"),
+        })
+        body["payload"] = {"resource": self._audio_resource(pcm8)}
+        result = await self._call(session, body, "searchScoreFeaRes")
+        score = float(result.get("score", 0) or 0)
+        threshold = float(os.getenv("XFYUN_VOICEPRINT_THRESHOLD", "0.75"))
+        return {"verified": score >= threshold, "score": score, "threshold": threshold, "raw": result}
+
+    async def delete(self, session: aiohttp.ClientSession, provider_voiceprint_id: str) -> None:
+        await self._ensure_group(session)
+        body = self._base_body("deleteFeature", {
+            "groupId": VOICEPRINT_GROUP_ID[:32],
+            "featureId": provider_voiceprint_id,
+            **self._result_spec("deleteFeatureRes"),
+        })
+        await self._call(session, body, "deleteFeatureRes")
+
+
+def get_voiceprint_provider():
+    provider = _voiceprint_provider_name()
+    if provider == "tencent":
+        return TencentVoiceprintProvider()
+    if provider == "xfyun":
+        return XfyunVoiceprintProvider()
+    raise VoiceprintError("disabled", "voiceprint provider is disabled")
+
+
+async def save_voiceprint(db, speaker_id: str, speaker_name: str, provider: str, provider_voiceprint_id: str):
+    now = time.time()
+    item = {
+        "speaker_id": speaker_id,
+        "speaker_name": speaker_name,
+        "provider": provider,
+        "provider_voiceprint_id": provider_voiceprint_id,
+        "group_id": VOICEPRINT_GROUP_ID,
+        "created_at": now,
+        "updated_at": now,
+    }
+    voiceprint_registry[(speaker_id, provider)] = item
+    if not db:
+        return
+    await db.execute("""
+        INSERT INTO voiceprints (
+            speaker_id, speaker_name, provider, provider_voiceprint_id,
+            group_id, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(speaker_id, provider) DO UPDATE SET
+            speaker_name=excluded.speaker_name,
+            provider_voiceprint_id=excluded.provider_voiceprint_id,
+            group_id=excluded.group_id,
+            updated_at=excluded.updated_at
+    """, (
+        speaker_id, speaker_name, provider, provider_voiceprint_id,
+        VOICEPRINT_GROUP_ID, now, now,
+    ))
+    await db.commit()
+
+
+async def load_voiceprint(db, speaker_id: str, provider: str) -> dict | None:
+    cached = voiceprint_registry.get((speaker_id, provider))
+    if cached:
+        return cached
+    if not db:
+        return None
+    async with db.execute(
+        "SELECT speaker_id, speaker_name, provider, provider_voiceprint_id, group_id, created_at, updated_at "
+        "FROM voiceprints WHERE speaker_id=? AND provider=?",
+        (speaker_id, provider),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    item = {
+        "speaker_id": row[0],
+        "speaker_name": row[1] or "",
+        "provider": row[2],
+        "provider_voiceprint_id": row[3],
+        "group_id": row[4],
+        "created_at": row[5],
+        "updated_at": row[6],
+    }
+    voiceprint_registry[(speaker_id, provider)] = item
+    return item
+
+
+async def send_json(websocket, payload: dict):
+    await websocket.send(json.dumps(payload, ensure_ascii=False))
+
+
+async def finish_voiceprint_capture(
+    websocket,
+    http_session: aiohttp.ClientSession,
+    db,
+    voice_state: dict,
+    voice_identity: dict,
+    session_id: str,
+):
+    stage = voice_state.get("stage")
+    speaker_id = voice_state.get("speaker_id") or "counselor_default"
+    speaker_name = voice_state.get("speaker_name") or "咨询师"
+    pcm = bytes(voice_state.get("buffer", b""))
+    voice_state.update({"stage": None, "buffer": bytearray(), "speaker_id": "", "speaker_name": ""})
+
+    provider_name = _voiceprint_provider_name()
+    try:
+        meta = _validate_voiceprint_audio(pcm, stage or "verify")
+        provider = get_voiceprint_provider()
+        if stage == "enroll":
+            result = await provider.enroll(http_session, speaker_id, speaker_name, pcm)
+            provider_voiceprint_id = result["provider_voiceprint_id"]
+            await save_voiceprint(db, speaker_id, speaker_name, provider.name, provider_voiceprint_id)
+            payload = {
+                "type": "voiceprint_result",
+                "stage": "enroll",
+                "provider": provider.name,
+                "speaker_id": speaker_id,
+                "speaker_name": speaker_name,
+                "provider_voiceprint_id": provider_voiceprint_id,
+                "enrolled": True,
+                **meta,
+            }
+        elif stage == "verify":
+            record = await load_voiceprint(db, speaker_id, provider.name)
+            if not record:
+                raise VoiceprintError("not_enrolled", f"speaker {speaker_id} is not enrolled for {provider.name}")
+            result = await provider.verify(http_session, record["provider_voiceprint_id"], pcm)
+            verified = bool(result.get("verified"))
+            payload = {
+                "type": "voiceprint_result",
+                "stage": "verify",
+                "provider": provider.name,
+                "speaker_id": speaker_id,
+                "speaker_name": record.get("speaker_name") or speaker_name,
+                "verified": verified,
+                "score": result.get("score", 0),
+                "threshold": result.get("threshold"),
+                **meta,
+            }
+            voice_identity.clear()
+            voice_identity.update({
+                "voiceprint_verified": verified,
+                "provider": provider.name,
+                "score": result.get("score", 0),
+                "speaker_id": speaker_id,
+                "verified_at": time.time(),
+            })
+        else:
+            raise VoiceprintError("invalid_stage", "voiceprint capture stage is invalid")
+        await send_json(websocket, payload)
+        asyncio.create_task(broadcast_admin({**payload, "session_id": session_id}))
+    except VoiceprintError as e:
+        log.warning(f"[Voiceprint/{provider_name}] {stage} failed: {e.code} {e.detail}")
+        payload = {
+            "type": "voiceprint_error",
+            "stage": stage or "unknown",
+            "provider": provider_name,
+            "speaker_id": speaker_id,
+            "message": e.code,
+            "detail": e.message,
+        }
+        await send_json(websocket, payload)
+        asyncio.create_task(broadcast_admin({**payload, "session_id": session_id}))
+    except Exception as e:
+        log.error(f"[Voiceprint/{provider_name}] {stage} crashed: {e}\n{traceback.format_exc()}")
+        await send_json(websocket, {
+            "type": "voiceprint_error",
+            "stage": stage or "unknown",
+            "provider": provider_name,
+            "speaker_id": speaker_id,
+            "message": "internal_error",
+            "detail": str(e),
+        })
+
+
+async def handle_voiceprint_command(
+    websocket,
+    http_session: aiohttp.ClientSession,
+    db,
+    voice_state: dict,
+    voice_identity: dict,
+    session_id: str,
+    cmd: dict,
+) -> bool:
+    msg_type = cmd.get("type")
+    if msg_type not in (
+        "voiceprint_enroll_start", "voiceprint_enroll_stop",
+        "voiceprint_verify_start", "voiceprint_verify_stop",
+    ):
+        return False
+    if msg_type.endswith("_start"):
+        stage = "enroll" if "enroll" in msg_type else "verify"
+        if _voiceprint_provider_name() == "off":
+            await send_json(websocket, {
+                "type": "voiceprint_error",
+                "stage": stage,
+                "provider": "off",
+                "message": "disabled",
+            })
+            return True
+        voice_state.update({
+            "stage": stage,
+            "speaker_id": str(cmd.get("speaker_id") or "counselor_default"),
+            "speaker_name": str(cmd.get("speaker_name") or "咨询师"),
+            "buffer": bytearray(),
+            "started_at": time.time(),
+        })
+        payload = {
+            "type": "voiceprint_status",
+            "stage": stage,
+            "provider": _voiceprint_provider_name(),
+            "speaker_id": voice_state["speaker_id"],
+            "status": "recording",
+        }
+        await send_json(websocket, payload)
+        asyncio.create_task(broadcast_admin({**payload, "session_id": session_id}))
+        return True
+
+    expected_stage = "enroll" if "enroll" in msg_type else "verify"
+    if voice_state.get("stage") != expected_stage:
+        await send_json(websocket, {
+            "type": "voiceprint_error",
+            "stage": expected_stage,
+            "provider": _voiceprint_provider_name(),
+            "message": "not_recording",
+        })
+        return True
+    await finish_voiceprint_capture(websocket, http_session, db, voice_state, voice_identity, session_id)
+    return True
 
 # ─────────────────────────────────────────────────────────────
 #  ASR — 本地模式（FunASR WebSocket）
@@ -613,6 +1217,7 @@ async def process_text(
     db,
     alert_cooldown: list,   # [float] — cooldown_until timestamp, mutable so closure can update
     send_transcript: bool = True,
+    identity: dict | None = None,
 ):
     if not text or len(text) < MIN_TEXT_LEN:
         return
@@ -665,6 +1270,13 @@ async def process_text(
         "suggestion": alert_data.get("suggestion", ""),
         "timestamp":  time.time(),
     }
+    if identity:
+        alert["identity"] = {
+            "voiceprint_verified": identity.get("voiceprint_verified"),
+            "provider":            identity.get("provider"),
+            "score":               identity.get("score"),
+            "speaker_id":          identity.get("speaker_id"),
+        }
     log.warning(f"[ALERT] level={alert['level']} kw={alert['keyword']!r} text={text!r}")
 
     try:
@@ -699,9 +1311,13 @@ async def process_window(
     session_id: str,
     db,
     alert_cooldown: list,
+    identity: dict | None = None,
 ):
     text = await transcribe(pcm, http_session)
-    await process_text(http_session, websocket, text, context_buf, llm_sem, session_id, db, alert_cooldown)
+    await process_text(
+        http_session, websocket, text, context_buf, llm_sem,
+        session_id, db, alert_cooldown, identity=identity
+    )
 
 # ─────────────────────────────────────────────────────────────
 #  流式连接处理（ASR_PROVIDER=xunfei）
@@ -716,6 +1332,8 @@ async def handle_stream(websocket, db):
     recording       = False
     xf_session      = None
     pcm_file        = None
+    voice_state     = {"stage": None, "buffer": bytearray(), "speaker_id": "", "speaker_name": ""}
+    voice_identity  = {}
 
     _ssl_ctx = ssl.create_default_context()
     _ssl_ctx.check_hostname = False
@@ -735,7 +1353,8 @@ async def handle_stream(websocket, db):
             # 在 http_session 关闭前完成 LLM 分析，防止最后几句话漏报预警。
             await process_text(http_session, websocket, sentence,
                                context_buf, llm_sem, session_id, db,
-                               alert_cooldown, send_transcript=False)
+                               alert_cooldown, send_transcript=False,
+                               identity=voice_identity)
 
         async def on_interim(text: str):
             try:
@@ -749,7 +1368,21 @@ async def handle_stream(websocket, db):
         try:
             async for message in websocket:
                 if isinstance(message, str):
-                    cmd = message.strip().upper()
+                    raw = message.strip()
+                    if raw.startswith("{"):
+                        try:
+                            cmd_obj = json.loads(raw)
+                        except Exception:
+                            cmd_obj = None
+                        if isinstance(cmd_obj, dict):
+                            handled = await handle_voiceprint_command(
+                                websocket, http_session, db, voice_state,
+                                voice_identity, session_id, cmd_obj
+                            )
+                            if handled:
+                                continue
+                            continue
+                    cmd = raw.upper()
                     if cmd == "START":
                         if xf_session:
                             await xf_session.stop()
@@ -808,7 +1441,16 @@ async def handle_stream(websocket, db):
                         log.info(f"[WS] {client} STOP (stream)")
                     continue
 
-                if not recording or not isinstance(message, bytes):
+                if not isinstance(message, bytes):
+                    continue
+
+                if voice_state.get("stage"):
+                    max_bytes = int((VOICEPRINT_MAX_SEC + 1) * SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
+                    if len(voice_state["buffer"]) < max_bytes:
+                        voice_state["buffer"].extend(message)
+                    continue
+
+                if not recording:
                     continue
 
                 if xf_session:
@@ -846,6 +1488,8 @@ async def handle_batch(websocket, db):
     context_buf: deque[str] = deque()
     llm_sem         = asyncio.Semaphore(LLM_CONCURRENCY)
     alert_cooldown  = [0.0]
+    voice_state     = {"stage": None, "buffer": bytearray(), "speaker_id": "", "speaker_name": ""}
+    voice_identity  = {}
 
     _ssl_ctx2 = ssl.create_default_context()
     _ssl_ctx2.check_hostname = False
@@ -855,7 +1499,21 @@ async def handle_batch(websocket, db):
         try:
             async for message in websocket:
                 if isinstance(message, str):
-                    cmd = message.strip().upper()
+                    raw = message.strip()
+                    if raw.startswith("{"):
+                        try:
+                            cmd_obj = json.loads(raw)
+                        except Exception:
+                            cmd_obj = None
+                        if isinstance(cmd_obj, dict):
+                            handled = await handle_voiceprint_command(
+                                websocket, http_session, db, voice_state,
+                                voice_identity, session_id, cmd_obj
+                            )
+                            if handled:
+                                continue
+                            continue
+                    cmd = raw.upper()
                     if cmd == "START":
                         recording  = True
                         session_id = str(uuid.uuid4())
@@ -872,12 +1530,22 @@ async def handle_batch(websocket, db):
                             asyncio.create_task(
                                 process_window(http_session, websocket,
                                                bytes(audio_buf), context_buf,
-                                               llm_sem, session_id, db, alert_cooldown)
+                                               llm_sem, session_id, db, alert_cooldown,
+                                               identity=voice_identity)
                             )
                         audio_buf.clear()
                     continue
 
-                if not recording or not isinstance(message, bytes):
+                if not isinstance(message, bytes):
+                    continue
+
+                if voice_state.get("stage"):
+                    max_bytes = int((VOICEPRINT_MAX_SEC + 1) * SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
+                    if len(voice_state["buffer"]) < max_bytes:
+                        voice_state["buffer"].extend(message)
+                    continue
+
+                if not recording:
                     continue
 
                 audio_buf.extend(message)
@@ -886,7 +1554,8 @@ async def handle_batch(websocket, db):
                     audio_buf = bytearray(audio_buf[WINDOW_BYTES:])
                     asyncio.create_task(
                         process_window(http_session, websocket, chunk,
-                                       context_buf, llm_sem, session_id, db, alert_cooldown)
+                                       context_buf, llm_sem, session_id, db, alert_cooldown,
+                                       identity=voice_identity)
                     )
 
         except websockets.exceptions.ConnectionClosed:
@@ -1053,6 +1722,7 @@ async def main():
     else:
         log.info(f"FunASR WS: {FUNASR_WS_URL}")
     log.info(f"LLM: {LLM_BASE_URL}  model={LLM_MODEL}")
+    log.info(f"Voiceprint: provider={_voiceprint_provider_name()} group={VOICEPRINT_GROUP_ID}")
     log.info(f"Admin webhook: {ADMIN_WEBHOOK_URL or '(disabled)'}")
     log.info(f"DB: {DB_PATH or '(disabled)'}")
 

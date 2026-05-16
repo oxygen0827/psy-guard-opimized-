@@ -7,9 +7,9 @@ XIAO nRF52840 Sense 心理咨询预警系统 - 手机端
 | 文件 | 职责 |
 |---|---|
 | `BLEManager.swift` | CoreBluetooth，扫描/连接/接收音频 |
-| `ServerRelay.swift` | WebSocket，转发音频到服务器，接收预警 |
-| `AppViewModel.swift` | 业务逻辑，连接 BLE 和服务器两层 |
-| `ContentView.swift` | SwiftUI UI，状态/录音按钮/预警列表 |
+| `ServerRelay.swift` | WebSocket，转发音频到服务器，接收预警/字幕/声纹结果 |
+| `AppViewModel.swift` | 业务逻辑，连接 BLE、服务器和手机麦克风 |
+| `ContentView.swift` | SwiftUI UI，状态/录音按钮/声纹按钮/预警列表 |
 
 ## 使用的 BLE UUIDs（Nordic UART Service）
 
@@ -23,7 +23,7 @@ Arduino 端需使用相同 UUID。
 
 ## 服务器
 
-WebSocket 地址：`ws://150.158.146.192:6146`
+WebSocket 地址：`ws://150.158.146.192:8097`
 
 在 `ServerRelay.swift` 第 11 行修改。
 
@@ -38,11 +38,21 @@ WebSocket 地址：`ws://150.158.146.192:6146`
 ```
 XIAO BLE notify (PCM chunks)
     -> BLEManager.bleDidReceiveAudio()
-    -> ServerRelay.sendAudioChunk()  (4KB 缓冲后发送)
+    -> ServerRelay.sendAudioChunk()  (~100ms/1600字节缓冲后发送)
     -> WebSocket -> 服务器
-    -> 服务器返回 JSON alert
+    -> 服务器返回 JSON transcript / alert / voiceprint_result
     -> ServerRelay 解析 -> AppViewModel.alerts
     -> ContentView 展示预警
+```
+
+## 声纹认证
+
+App 提供“录入声纹”和“身份确认”按钮，默认 `speaker_id` 为 `counselor_default`。录入/确认期间会复用当前音频来源：BLE 模式用 XIAO，手机麦克风调试模式用 iPhone 麦克风。
+
+服务器返回示例：
+
+```json
+{"type":"voiceprint_result","stage":"verify","provider":"tencent","verified":true,"score":86.5}
 ```
 
 ## 服务器 Alert JSON 格式

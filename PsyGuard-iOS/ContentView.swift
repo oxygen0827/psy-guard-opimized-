@@ -50,6 +50,16 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
+            HStack {
+                Circle()
+                    .fill(vm.voiceprintVerified ? .green : (vm.voiceprintBusy ? .orange : .gray))
+                    .frame(width: 10, height: 10)
+                Text("声纹: \(vm.voiceprintStatus)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
@@ -70,6 +80,8 @@ struct ContentView: View {
             .padding(.horizontal, 24)
             .disabled(vm.isRecording)
 
+            voiceprintControls
+
             Button(action: { vm.toggleRecording() }) {
                 VStack(spacing: 8) {
                     Image(systemName: vm.isRecording ? "mic.fill" : "mic")
@@ -83,9 +95,38 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .disabled(vm.usePhoneMic ? !vm.serverConnected : (!vm.bleConnected || !vm.serverConnected))
-            .opacity((vm.usePhoneMic ? vm.serverConnected : (vm.bleConnected && vm.serverConnected)) ? 1 : 0.4)
+            .disabled(vm.voiceprintBusy || (vm.usePhoneMic ? !vm.serverConnected : (!vm.bleConnected || !vm.serverConnected)))
+            .opacity((!vm.voiceprintBusy && (vm.usePhoneMic ? vm.serverConnected : (vm.bleConnected && vm.serverConnected))) ? 1 : 0.4)
         }
+    }
+
+    private var voiceprintControls: some View {
+        let sourceReady = vm.usePhoneMic ? vm.serverConnected : (vm.bleConnected && vm.serverConnected)
+        let waitingForResult = vm.voiceprintBusy && vm.voiceprintCaptureMode == nil
+        return HStack(spacing: 10) {
+            Button {
+                vm.toggleVoiceprintEnroll()
+            } label: {
+                Label(vm.voiceprintCaptureMode == .enroll ? "停止录入" : "录入声纹",
+                      systemImage: "person.crop.circle.badge.plus")
+                    .font(.caption.bold())
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(vm.isRecording || !sourceReady || waitingForResult || (vm.voiceprintCaptureMode != nil && vm.voiceprintCaptureMode != .enroll))
+
+            Button {
+                vm.toggleVoiceprintVerify()
+            } label: {
+                Label(vm.voiceprintCaptureMode == .verify ? "停止确认" : "身份确认",
+                      systemImage: "checkmark.shield")
+                    .font(.caption.bold())
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(vm.isRecording || !sourceReady || waitingForResult || (vm.voiceprintCaptureMode != nil && vm.voiceprintCaptureMode != .verify))
+        }
+        .padding(.horizontal, 24)
     }
 
     // MARK: - 实时字幕

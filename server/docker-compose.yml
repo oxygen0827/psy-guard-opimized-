@@ -20,21 +20,41 @@ services:
 
       # API 模式 STT（ASR_PROVIDER=api 时生效）
       #- ASR_API_URL=https://api.openai.com/v1
-      #- ASR_API_KEY=sk-xxx
+      #- ASR_API_KEY=${ASR_API_KEY:-}
       #- ASR_MODEL=whisper-1
 
       # ── 讯飞实时 ASR（ASR_PROVIDER=xunfei 时生效）──────────
       # 登录 https://console.xfyun.cn → 创建应用 → 实时语音转写
-      - XUNFEI_APPID=baf02ba0
-      - XUNFEI_APISECRET=YjUwNzk0N2U5MWZlNzIzMGNmMjBlYTA2
-      - XUNFEI_APIKEY=2da75cd52e84fc0c09471cb5660532d7
+      - XUNFEI_APPID=${XUNFEI_APPID:-}
+      - XUNFEI_APISECRET=${XUNFEI_APISECRET:-}
+      - XUNFEI_APIKEY=${XUNFEI_APIKEY:-}
+
+      # ── 声纹认证（旁路能力，不替换实时 ASR）────────────────
+      # tencent: 腾讯云语音识别 ASR 说话人认证（主方案）
+      # xfyun:   科大讯飞声纹识别 WebAPI（备选）
+      # off:     关闭声纹认证
+      - VOICEPRINT_PROVIDER=tencent
+      - VOICEPRINT_GROUP_ID=psy_guard_counselors
+      - VOICEPRINT_ENROLL_MIN_SEC=8
+      - VOICEPRINT_VERIFY_MIN_SEC=2
+      - VOICEPRINT_MAX_SEC=30
+
+      # 腾讯云说话人认证（VOICEPRINT_PROVIDER=tencent）
+      - TENCENT_SECRET_ID=${TENCENT_SECRET_ID:-}
+      - TENCENT_SECRET_KEY=${TENCENT_SECRET_KEY:-}
+      - TENCENT_REGION=${TENCENT_REGION:-ap-guangzhou}
+
+      # 讯飞声纹识别 WebAPI（VOICEPRINT_PROVIDER=xfyun）
+      - XFYUN_VOICEPRINT_APPID=${XFYUN_VOICEPRINT_APPID:-}
+      - XFYUN_VOICEPRINT_APIKEY=${XFYUN_VOICEPRINT_APIKEY:-}
+      - XFYUN_VOICEPRINT_APISECRET=${XFYUN_VOICEPRINT_APISECRET:-}
 
       # ── LLM（三种模式通用，支持任意 OpenAI-compatible API）──
       # 阿里百炼 qwen-flash（推荐：速度快、成本低、中文效果好）
       # 登录 https://bailian.console.aliyun.com → API-KEY 管理
-      - LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-      - LLM_MODEL=qwen-flash
-      - LLM_API_KEY=sk-216e0b0a6b3d4551a4983761b7fb4e1f
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-flash}
+      - LLM_API_KEY=${LLM_API_KEY:-}
       # 本地 LLM 示例（注释掉上面三行，取消下面注释）:
       #- LLM_BASE_URL=http://localhost:8086/v1
       #- LLM_MODEL=gemma-4-E4B-it-Q4_K_M.gguf

@@ -14,8 +14,8 @@
        │ BLE 5.0 Nordic UART Service（244字节/包）
        ▼
 [iPhone App（Swift / SwiftUI）]
-  CoreBluetooth 接收 → ~50ms 缓冲 → WebSocket 中继
-  实时字幕（中间结果橙色显示）+ 预警通知 + 预警确认
+  CoreBluetooth 接收 → ~100ms/1600字节缓冲 → WebSocket 中继
+  实时字幕（中间结果橙色显示）+ 声纹认证 + 预警通知 + 预警确认
   （调试）手机麦克风模式，绕过 XIAO 固件直接采集
        │ ws://server:8097
        ▼
@@ -26,6 +26,7 @@
        │ 每句确认后立刻重连讯飞（消除句间死区）
        ▼
   LLM 语义分析（OpenAI-compatible）
+  + 声纹认证旁路（腾讯云主方案 / 讯飞备选）
   + SQLite 持久化
   + 高危 Webhook 推送
        │ JSON alert
@@ -38,10 +39,10 @@
 ## 工作流程
 
 ```
-1. 咨询师佩戴设备，打开 iOS App，点击麦克风按钮
+1. 咨询师佩戴设备，打开 iOS App，可先录入声纹并做身份确认
 2. App 先通知服务器 START，再通过 BLE 让 XIAO 开始录制
 3. XIAO 持续采集 PCM，BLE 分包推给手机（244字节/包）
-4. 手机缓冲约 50ms（1600字节）后通过 WebSocket 推给服务器
+4. 手机缓冲约 100ms（1600字节）后通过 WebSocket 推给服务器
 5. 服务器将音频实时推给讯飞 IAT
    - 识别过程中：推送中间结果（type=interim）→ iOS 橙色实时显示
    - 句子确认后（ls=True）：推送最终文本（type=transcript）→ 立刻重连讯飞
@@ -67,15 +68,17 @@ psy-guard/
 ├── PsyGuard-iOS/
 │   ├── PsyGuard.xcodeproj/     # Xcode 工程
 │   ├── BLEManager.swift        # CoreBluetooth BLE 管理
-│   ├── ServerRelay.swift       # WebSocket 中继 + 预警/字幕解析
-│   ├── AppViewModel.swift      # 业务逻辑（通知/会话/手机麦克风模式）
-│   ├── ContentView.swift       # SwiftUI 主界面
+│   ├── ServerRelay.swift       # WebSocket 中继 + 预警/字幕/声纹解析
+│   ├── AppViewModel.swift      # 业务逻辑（通知/会话/声纹/手机麦克风模式）
+│   ├── ContentView.swift       # SwiftUI 主界面（录音/声纹/预警）
 │   ├── MicCapture.swift        # 手机麦克风采集（调试用）
 │   └── PsyGuardApp.swift       # App 入口（通知权限申请）
 ├── server/
-│   ├── server.py               # WebSocket 服务（三模式 ASR + LLM）
+│   ├── server.py               # WebSocket 服务（三模式 ASR + LLM + 声纹认证）
 │   ├── corpus.json             # AI心理督导语料库（150条，启动时注入LLM提示词）
 │   ├── Dockerfile
+│   ├── .env.example            # 本地/部署环境变量模板（真实 .env 不入库）
+│   ├── run.ps1                 # Windows 本地启动脚本（从环境变量读取密钥）
 │   └── docker-compose.yml
 ├── web/
 │   ├── client.html             # 网页版客户端（测试 ASR + 预警）
@@ -127,7 +130,7 @@ psy-guard/
 1. 打开 `PsyGuard-iOS/PsyGuard.xcodeproj`
 2. `Info.plist` 已包含权限：`NSBluetoothAlwaysUsageDescription`、`NSBluetoothPeripheralUsageDescription`、`NSMicrophoneUsageDescription`
 3. Signing & Capabilities → Background Modes → 勾选 `Uses Bluetooth LE accessories`
-4. 修改服务器地址（`ServerRelay.swift` 第 46 行）：
+4. 修改服务器地址（`ServerRelay.swift` 里的 `serverURL`）：
    ```swift
    private let serverURL = URL(string: "ws://your-server:port")!
    ```
@@ -181,17 +184,28 @@ psy-guard/
 
 ### 推荐方式：讯飞流式 ASR + 阿里百炼 LLM
 
-编辑 `server/docker-compose.yml`，填入密钥：
+复制环境变量模板并填入真实密钥：
+
+```bash
+cd server
+cp .env.example .env
+```
+
+`server/.env` 示例：
 
 ```yaml
-- ASR_PROVIDER=xunfei
-- XUNFEI_APPID=your_appid
-- XUNFEI_APISECRET=your_apisecret
-- XUNFEI_APIKEY=your_apikey
-- LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-- LLM_MODEL=qwen-flash
-- LLM_API_KEY=sk-xxx
+XUNFEI_APPID=your_appid
+XUNFEI_APISECRET=your_apisecret
+XUNFEI_APIKEY=your_apikey
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-flash
+LLM_API_KEY=your_llm_key
+VOICEPRINT_PROVIDER=tencent
+TENCENT_SECRET_ID=your_tencent_secret_id
+TENCENT_SECRET_KEY=your_tencent_secret_key
 ```
+
+真实密钥只放在 `.env` 或服务器环境变量中，不要写进仓库里的 compose 文件。
 
 启动：
 
@@ -227,10 +241,28 @@ docker run -d --name funasr -p 10095:10095 \
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `8097` | WebSocket 监听端口 |
+| `VOICEPRINT_PROVIDER` | `tencent` | 声纹认证 provider：`tencent` / `xfyun` / `off` |
+| `VOICEPRINT_GROUP_ID` | `psy_guard_counselors` | 云端声纹分组 ID |
+| `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` | （空） | 腾讯云说话人认证密钥 |
+| `XFYUN_VOICEPRINT_APPID` / `XFYUN_VOICEPRINT_APIKEY` / `XFYUN_VOICEPRINT_APISECRET` | （空） | 讯飞声纹识别备选密钥 |
 | `MIN_TEXT_LEN` | `2` | 过短文本跳过分析（≥2 保留"想死""救命"等短句） |
 | `CONTEXT_MAX_CHARS` | `300` | 滚动上下文历史长度 |
 | `DB_PATH` | `/data/psy-guard.db` | SQLite 路径，留空禁用持久化 |
 | `ADMIN_WEBHOOK_URL` | （空） | 高危预警管理员推送 |
+
+### 声纹认证
+
+App 里新增“录入声纹”和“身份确认”两个按钮。录入时采集 8-30 秒咨询师声音，服务器把现有 8kHz PCM 临时升采样到 16kHz 后调用云端声纹 API；身份确认时采集 2-30 秒声音并返回 `voiceprint_result`。
+
+WebSocket 控制消息：
+```json
+{"type":"voiceprint_enroll_start","speaker_id":"counselor_default","speaker_name":"咨询师"}
+{"type":"voiceprint_enroll_stop"}
+{"type":"voiceprint_verify_start","speaker_id":"counselor_default"}
+{"type":"voiceprint_verify_stop"}
+```
+
+声纹认证是旁路能力，不会替换现有讯飞流式 ASR；云 API 失败时，转写和预警主链路继续工作。声纹属于生物识别信息，录入前必须取得明确知情同意。
 
 **Webhook 示例**（高危时额外推送）：
 ```yaml

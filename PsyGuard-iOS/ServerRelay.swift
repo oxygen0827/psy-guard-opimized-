@@ -34,12 +34,26 @@ struct AlertMessage: Identifiable {
     }
 }
 
+struct VoiceprintResult {
+    let stage: String
+    let provider: String
+    let speakerId: String
+    let speakerName: String
+    let enrolled: Bool
+    let verified: Bool?
+    let score: Double?
+    let threshold: Double?
+    let durationSec: Double?
+}
+
 protocol ServerRelayDelegate: AnyObject {
     func relayDidConnect()
     func relayDidDisconnect()
     func relayDidReceiveAlert(_ alert: AlertMessage)
     func relayDidReceiveTranscript(_ text: String)
     func relayDidReceiveInterim(_ text: String)
+    func relayDidReceiveVoiceprintResult(_ result: VoiceprintResult)
+    func relayDidReceiveVoiceprintError(stage: String, provider: String, message: String, detail: String?)
 }
 
 final class ServerRelay: NSObject {
@@ -52,9 +66,9 @@ final class ServerRelay: NSObject {
     private(set) var isConnected = false
     private var stopped = false   // 主动调用 disconnect() 时置 true，阻止自动重连
 
-    // 发送缓冲：积攒约 50ms 的音频再发，平衡延迟和帧数
+    // 发送缓冲：积攒约 100ms 的音频再发，平衡延迟和帧数
     private var sendBuffer = Data()
-    private let bufferThreshold = 1600  // ~50ms @ 16kHz 16-bit mono
+    private let bufferThreshold = 1600  // ~100ms @ 8kHz 16-bit mono
     private let bufferQueue = DispatchQueue(label: "relay.buffer")
 
     override init() {
@@ -85,6 +99,29 @@ final class ServerRelay: NSObject {
 
     func sendStop() {
         webSocketTask?.send(.string("STOP")) { _ in }
+    }
+
+    func sendVoiceprintEnrollStart(speakerId: String, speakerName: String) {
+        sendJSON([
+            "type": "voiceprint_enroll_start",
+            "speaker_id": speakerId,
+            "speaker_name": speakerName
+        ])
+    }
+
+    func flushAndStopVoiceprintEnroll() {
+        flushAndSendJSON(["type": "voiceprint_enroll_stop"])
+    }
+
+    func sendVoiceprintVerifyStart(speakerId: String) {
+        sendJSON([
+            "type": "voiceprint_verify_start",
+            "speaker_id": speakerId
+        ])
+    }
+
+    func flushAndStopVoiceprintVerify() {
+        flushAndSendJSON(["type": "voiceprint_verify_stop"])
     }
 
     /// 先刷缓冲，再发 STOP，保证服务器在收到 STOP 前已处理最后一帧音频
@@ -120,6 +157,20 @@ final class ServerRelay: NSObject {
         sendBuffer.removeAll()
         let message = URLSessionWebSocketTask.Message.data(payload)
         webSocketTask?.send(message) { _ in }
+    }
+
+    private func sendJSON(_ dict: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+              let text = String(data: data, encoding: .utf8) else { return }
+        webSocketTask?.send(.string(text)) { _ in }
+    }
+
+    private func flushAndSendJSON(_ dict: [String: Any]) {
+        bufferQueue.async { [weak self] in
+            guard let self else { return }
+            self.flushBuffer()
+            self.sendJSON(dict)
+        }
     }
 
     private func receiveLoop() {
@@ -162,6 +213,41 @@ final class ServerRelay: NSObject {
         if type == "interim" {
             let text = dict["text"] as? String ?? ""
             DispatchQueue.main.async { self.delegate?.relayDidReceiveInterim(text) }
+            return
+        }
+
+        if type == "voiceprint_result" {
+            let score = (dict["score"] as? NSNumber)?.doubleValue
+            let threshold = (dict["threshold"] as? NSNumber)?.doubleValue
+            let durationSec = (dict["duration_sec"] as? NSNumber)?.doubleValue
+            let result = VoiceprintResult(
+                stage: dict["stage"] as? String ?? "",
+                provider: dict["provider"] as? String ?? "",
+                speakerId: dict["speaker_id"] as? String ?? "",
+                speakerName: dict["speaker_name"] as? String ?? "",
+                enrolled: dict["enrolled"] as? Bool ?? false,
+                verified: dict["verified"] as? Bool,
+                score: score,
+                threshold: threshold,
+                durationSec: durationSec
+            )
+            DispatchQueue.main.async { self.delegate?.relayDidReceiveVoiceprintResult(result) }
+            return
+        }
+
+        if type == "voiceprint_error" {
+            let stage = dict["stage"] as? String ?? ""
+            let provider = dict["provider"] as? String ?? ""
+            let message = dict["message"] as? String ?? ""
+            let detail = dict["detail"] as? String
+            DispatchQueue.main.async {
+                self.delegate?.relayDidReceiveVoiceprintError(
+                    stage: stage,
+                    provider: provider,
+                    message: message,
+                    detail: detail
+                )
+            }
             return
         }
 

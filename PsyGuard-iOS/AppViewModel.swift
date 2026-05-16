@@ -4,6 +4,11 @@ import UserNotifications
 
 final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDelegate {
 
+    enum VoiceprintCaptureMode: Equatable {
+        case enroll
+        case verify
+    }
+
     // MARK: - Published
 
     @Published var bleStatus: String = "未连接"
@@ -14,6 +19,10 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     @Published var serverConnected: Bool = false
     @Published var transcript: String = ""
     @Published var currentSentence: String = ""  // 讯飞实时中间结果
+    @Published var voiceprintStatus: String = "声纹未验证"
+    @Published var voiceprintVerified: Bool = false
+    @Published var voiceprintBusy: Bool = false
+    @Published var voiceprintCaptureMode: VoiceprintCaptureMode?
 
     // 会话计时
     @Published var sessionDurationText: String = ""
@@ -26,6 +35,8 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     private let bleManager  = BLEManager()
     private let relay       = ServerRelay()
     private let micCapture  = MicCapture()
+    private let defaultSpeakerId = "counselor_default"
+    private let defaultSpeakerName = "咨询师"
     private var sessionStart: Date?
     private var sessionTimer: Timer?
 
@@ -44,6 +55,7 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     // MARK: - User Actions
 
     func toggleRecording() {
+        guard voiceprintCaptureMode == nil, !voiceprintBusy else { return }
         isRecording.toggle()
         if isRecording {
             relay.sendStart()
@@ -76,6 +88,92 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
                 self?.bleStatus = "麦克风权限被拒绝"
             }
         }
+    }
+
+    func toggleVoiceprintEnroll() {
+        if voiceprintCaptureMode == .enroll {
+            stopVoiceprintCapture()
+        } else {
+            startVoiceprintCapture(.enroll)
+        }
+    }
+
+    func toggleVoiceprintVerify() {
+        if voiceprintCaptureMode == .verify {
+            stopVoiceprintCapture()
+        } else {
+            startVoiceprintCapture(.verify)
+        }
+    }
+
+    private var audioSourceReady: Bool {
+        usePhoneMic ? serverConnected : (bleConnected && serverConnected)
+    }
+
+    private func startVoiceprintCapture(_ mode: VoiceprintCaptureMode) {
+        guard !isRecording, audioSourceReady, voiceprintCaptureMode == nil, !voiceprintBusy else { return }
+        voiceprintCaptureMode = mode
+        voiceprintBusy = true
+        switch mode {
+        case .enroll:
+            voiceprintStatus = "正在录入声纹..."
+            relay.sendVoiceprintEnrollStart(speakerId: defaultSpeakerId, speakerName: defaultSpeakerName)
+        case .verify:
+            voiceprintStatus = "正在确认身份..."
+            relay.sendVoiceprintVerifyStart(speakerId: defaultSpeakerId)
+        }
+        startVoiceprintAudioSource()
+    }
+
+    private func stopVoiceprintCapture() {
+        guard let mode = voiceprintCaptureMode else { return }
+        if usePhoneMic {
+            micCapture.stop()
+        } else {
+            bleManager.sendControl(false)
+        }
+        switch mode {
+        case .enroll:
+            voiceprintStatus = "正在提交声纹..."
+            relay.flushAndStopVoiceprintEnroll()
+        case .verify:
+            voiceprintStatus = "正在比对声纹..."
+            relay.flushAndStopVoiceprintVerify()
+        }
+        voiceprintCaptureMode = nil
+    }
+
+    private func startVoiceprintAudioSource() {
+        if usePhoneMic {
+            micCapture.onChunk = { [weak self] data in
+                self?.relay.sendAudioChunk(data)
+            }
+            micCapture.requestAndStart { [weak self] granted in
+                if !granted {
+                    self?.cancelVoiceprintCapture(message: "麦克风权限被拒绝")
+                }
+            }
+        } else {
+            bleManager.sendControl(true)
+        }
+    }
+
+    private func cancelVoiceprintCapture(message: String) {
+        guard let mode = voiceprintCaptureMode else { return }
+        if usePhoneMic {
+            micCapture.stop()
+        } else {
+            bleManager.sendControl(false)
+        }
+        switch mode {
+        case .enroll:
+            relay.flushAndStopVoiceprintEnroll()
+        case .verify:
+            relay.flushAndStopVoiceprintVerify()
+        }
+        voiceprintCaptureMode = nil
+        voiceprintBusy = false
+        voiceprintStatus = message
     }
 
     func clearAlerts() {
@@ -155,6 +253,9 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
                     self?.relay.flushAndStop()
                     self?.endSession()
                 }
+                if self?.voiceprintCaptureMode != nil && self?.usePhoneMic == false {
+                    self?.cancelVoiceprintCapture(message: "设备断开，声纹采集已停止")
+                }
             case .scanning:
                 self?.bleStatus = "扫描中..."
                 self?.bleConnected = false
@@ -221,6 +322,41 @@ final class AppViewModel: ObservableObject, BLEManagerDelegate, ServerRelayDeleg
     func relayDidReceiveInterim(_ text: String) {
         DispatchQueue.main.async { [weak self] in
             self?.currentSentence = text
+        }
+    }
+
+    func relayDidReceiveVoiceprintResult(_ result: VoiceprintResult) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.voiceprintBusy = false
+            self.voiceprintCaptureMode = nil
+            if result.stage == "enroll" {
+                self.voiceprintVerified = false
+                self.voiceprintStatus = "声纹已录入"
+                return
+            }
+            let scoreText: String
+            if let score = result.score {
+                scoreText = String(format: "%.1f", score)
+            } else {
+                scoreText = "-"
+            }
+            if result.verified == true {
+                self.voiceprintVerified = true
+                self.voiceprintStatus = "身份已确认（\(result.provider)，\(scoreText)）"
+            } else {
+                self.voiceprintVerified = false
+                self.voiceprintStatus = "身份未通过（\(result.provider)，\(scoreText)）"
+            }
+        }
+    }
+
+    func relayDidReceiveVoiceprintError(stage: String, provider: String, message: String, detail: String?) {
+        DispatchQueue.main.async { [weak self] in
+            self?.voiceprintBusy = false
+            self?.voiceprintCaptureMode = nil
+            self?.voiceprintVerified = false
+            self?.voiceprintStatus = "声纹错误: \(message)"
         }
     }
 }

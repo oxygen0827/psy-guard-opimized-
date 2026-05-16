@@ -1,6 +1,6 @@
 import AVFoundation
 
-/// 用手机麦克风采集音频，输出 16kHz 16-bit PCM mono，格式与 XIAO 固件完全一致。
+/// 用手机麦克风采集音频，输出 8kHz 16-bit PCM mono，格式与 XIAO 固件完全一致。
 /// 仅用于调试：绕过 BLE 固件，直接验证服务器端语音识别是否正常。
 final class MicCapture {
 
@@ -50,7 +50,7 @@ final class MicCapture {
         let hwFormat  = inputNode.inputFormat(forBus: 0)
         guard let conv = AVAudioConverter(from: hwFormat, to: targetFormat) else {
             throw NSError(domain: "MicCapture", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "无法创建音频格式转换器（hw: \(hwFormat.sampleRate)Hz → 16kHz）"])
+                          userInfo: [NSLocalizedDescriptionKey: "无法创建音频格式转换器（hw: \(hwFormat.sampleRate)Hz → 8kHz）"])
         }
         converter = conv
 
